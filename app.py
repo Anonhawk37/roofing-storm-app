@@ -12,6 +12,7 @@ import io
 from datetime import datetime, date
 from typing import List, Dict, Tuple
 import json
+import requests
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -81,7 +82,7 @@ FOOTNOTE_STYLE = ParagraphStyle(
 )
 
 # ============================================================================
-# UTILITY: IMAGE COMPRESSION & MANAGEMENT
+# UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
 # ============================================================================
 
 def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, quality: int = 75) -> Tuple[bytes, int]:
@@ -115,6 +116,40 @@ def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, 
     except Exception as e:
         st.error(f"Error compressing image: {e}")
         return None, 0
+
+
+def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> RLImage:
+    """
+    Calculates proportion-preserving dimensions for ReportLab images to prevent squishing or stretching.
+    Accepts file path or bytes.
+    """
+    if isinstance(img_input, bytes):
+        pil_img = Image.open(io.BytesIO(img_input))
+        img_source = io.BytesIO(img_input)
+    else:
+        pil_img = Image.open(img_input)
+        img_source = img_input
+
+    w, h = pil_img.size
+    aspect = h / float(w)
+    
+    max_w = max_w_inches * inch
+    max_h = max_h_inches * inch
+
+    if w > h:
+        new_w = max_w
+        new_h = max_w * aspect
+        if new_h > max_h:
+            new_h = max_h
+            new_w = max_h / aspect
+    else:
+        new_h = max_h
+        new_w = max_h / aspect
+        if new_w > max_w:
+            new_w = max_w
+            new_h = max_w * aspect
+
+    return RLImage(img_source, width=new_w, height=new_h)
 
 
 def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
@@ -238,10 +273,10 @@ def generate_adjuster_pdf(
    
     # ========== PAGE 1: HEADER + METADATA ==========
    
-    # FIX #1: Clean Belmont Construction Logo Integration
+    # FIX #1 & LOGO ASPECT RATIO FIX: Clean Belmont Construction Logo Integration with exact proportions
     logo_file = os.path.abspath(logo_path)
     if os.path.exists(logo_file):
-        company_header_element = RLImage(logo_file, width=2.2*inch, height=0.75*inch)
+        company_header_element = get_aspect_rl_image(logo_file, max_w_inches=2.2, max_h_inches=0.75)
     else:
         company_header_element = Paragraph(f"<b>{COMPANY_NAME}</b>", TITLE_STYLE)
 
@@ -368,13 +403,13 @@ def generate_adjuster_pdf(
         for i in range(0, len(photo_list), 3):
             row_photos = photo_list[i:i+3]
            
-            # Build row data with photos (FIX #7: Removed raw IMG_xxxx captions under photos)
+            # Build row data with photos (FIX #7 & GRID ASPECT RATIO FIX)
             row_data = []
             for photo_dict in row_photos:
                 try:
-                    # Create image object from compressed bytes
-                    img_bytes = io.BytesIO(photo_dict['compressed_bytes'])
-                    img = RLImage(img_bytes, width=1.9*inch, height=1.42*inch)
+                    # Create image object using aspect ratio mathematical scaling
+                    img_bytes = photo_dict['compressed_bytes']
+                    img = get_aspect_rl_image(img_bytes, max_w_inches=1.9, max_h_inches=1.42)
                    
                     # Clean framed cell without raw filename text
                     cell_content = Table(
@@ -450,9 +485,27 @@ def main():
        
         st.divider()
         st.subheader("Property Information")
-        property_address = st.text_input("Property Address", placeholder="123 Main St, Springfield, MO 65807")
+        
+        # ADDRESS AUTOFILL INTEGRATION
+        raw_address_search = st.text_input("Property Address Search", placeholder="123 Main St, Springfield, MO", help="Type address to search")
+        property_address = raw_address_search
+        
+        if raw_address_search and len(raw_address_search) > 3:
+            try:
+                url = f"https://nominatim.openstreetmap.org/search?format=json&q={raw_address_search}"
+                headers = {'User-Agent': 'BelmontStormInspectionApp/1.0'}
+                res = requests.get(url, headers=headers).json()
+                if res:
+                    address_options = [item['display_name'] for item in res]
+                    property_address = st.selectbox("Select Matching Address", address_options)
+            except Exception:
+                property_address = raw_address_search
+
         customer_name = st.text_input("Customer Name", placeholder="John Smith")
-        dol = st.text_input("Date of Loss (DOL)", placeholder="YYYY-MM-DD")
+        
+        # DATE OF LOSS CALENDAR PICKER INTEGRATION
+        dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
+        dol = dol_val.strftime("%Y-%m-%d")
         
         # FIX #2: Dynamic Inspection Date with quick reset
         col_date, col_btn = st.columns([2, 1])
