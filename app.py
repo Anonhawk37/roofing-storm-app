@@ -625,6 +625,19 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
+        /* Centered 80px Logo Container */
+        .logo-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            padding-top: 6px;
+        }
+        .logo-container img {
+            width: 80px;
+            height: auto;
+        }
+
         /* Dark Slate Sidebar Reverted */
         [data-testid="stSidebar"] {
             background-color: #1E293B !important;
@@ -695,13 +708,13 @@ def main():
     # ========== BRANDED HEADER ==========
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     
-    col_logo, col_title = st.columns([1.5, 4])
+    col_logo, col_title = st.columns([1, 4])
     with col_logo:
         if os.path.exists(logo_path):
-            # Centered image layout inside column with flex alignment
-            sub_col1, sub_col2, sub_col3 = st.columns([1, 2, 1])
-            with sub_col2:
-                st.image(logo_path, use_container_width=True)
+            st.markdown(
+                f'<div class="logo-container"><img src="app/static/BELMONT_LOGO.png" alt="Belmont Logo"></div>',
+                unsafe_allow_html=True
+            )
         else:
             st.markdown("<h3 style='text-align: center;'>🏢 <b>BELMONT</b></h3>", unsafe_allow_html=True)
             
