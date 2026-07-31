@@ -587,11 +587,11 @@ def generate_adjuster_pdf(
 
 
 # ============================================================================
-# STREAMLIT UI WITH HIGH-CONTRAST GOLD BRANDING
+# STREAMLIT UI WITH DARK SLATE SIDEBAR & GOLD BRANDING
 # ============================================================================
 
 def apply_belmont_branding():
-    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding and white sidebar."""
+    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding and Dark Slate Sidebar."""
     st.markdown(
         """
         <style>
@@ -599,19 +599,6 @@ def apply_belmont_branding():
         .main .block-container {
             padding-top: 2rem;
             max-width: 1100px;
-        }
-        
-        /* Centered & Scaled Logo Style */
-        .logo-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 10px 0;
-        }
-        .logo-container img {
-            max-height: 80px;
-            width: auto;
-            object-fit: contain;
         }
 
         /* Custom Header Card with Belmont Gold Border */
@@ -638,32 +625,28 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* White Sidebar Styling */
+        /* Dark Slate Sidebar Reverted */
         [data-testid="stSidebar"] {
-            background-color: #FFFFFF !important;
-            border-right: 1px solid #E2E8F0;
+            background-color: #1E293B !important;
         }
         
-        /* Sidebar Headers & Field Labels in Belmont Gold & Dark Slate */
-        [data-testid="stSidebar"] h3 {
-            color: #D4AF37 !important;
-            font-weight: 700 !important;
-        }
+        /* Sidebar Headers & Field Labels in Belmont Gold */
+        [data-testid="stSidebar"] h3,
         [data-testid="stSidebar"] label,
         [data-testid="stSidebar"] .stMarkdown p {
-            color: #1E293B !important;
+            color: #D4AF37 !important;
             font-weight: 600 !important;
         }
         
         /* Sidebar Divider Lines */
         [data-testid="stSidebar"] hr {
             border-color: #D4AF37 !important;
-            opacity: 0.4;
+            opacity: 0.3;
         }
 
         /* Sidebar Captions */
         [data-testid="stSidebar"] .stCaption p {
-            color: #64748B !important;
+            color: #CBD5E1 !important;
         }
 
         /* Main Screen Section Banners - High Contrast White Text */
@@ -707,16 +690,10 @@ def main():
     col_logo, col_title = st.columns([1.5, 4])
     with col_logo:
         if os.path.exists(logo_path):
-            st.markdown(
-                f'''
-                <div class="logo-container">
-                    <img src="data:image/png;base64,{st.image(logo_path, output_format="PNG") if False else ""}" />
-                </div>
-                ''',
-                unsafe_allow_html=True
-            )
-            # Standard Streamlit centered container image as reliable fallback
-            st.image(logo_path, width=160)
+            # Centered image layout using 3 sub-columns
+            _, img_col, _ = st.columns([1, 2, 1])
+            with img_col:
+                st.image(logo_path, width=130)
         else:
             st.markdown("### 🏢 **BELMONT**")
             
