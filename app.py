@@ -602,6 +602,20 @@ def apply_belmont_branding():
             max-width: 1100px;
         }
 
+        /* OVERRIDE STREAMLIT FLEX COLUMN ALIGNMENT FOR TOP LOGO ALIGNMENT */
+        [data-testid="stHorizontalBlock"] {
+            align-items: flex-start !important;
+        }
+        [data-testid="stColumn"] {
+            align-self: flex-start !important;
+            padding-top: 0px !important;
+            margin-top: 0px !important;
+        }
+        [data-testid="stColumn"] > div {
+            padding-top: 0px !important;
+            margin-top: 0px !important;
+        }
+
         /* Custom Header Card with Belmont Gold Border */
         .belmont-header {
             background-color: #FAF8F5;
@@ -609,6 +623,7 @@ def apply_belmont_branding():
             padding: 18px 24px;
             border-radius: 8px;
             margin-bottom: 20px;
+            margin-top: 0px !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.04);
         }
         .belmont-title {
@@ -626,21 +641,22 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* Top-Aligned Logo Container with Reduced Top Margin */
+        /* Strict Top-Aligned Logo Container */
         .logo-container {
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: flex-start !important;
             width: 100%;
-            margin-top: -4px;
-            margin-bottom: 16px;
-            padding-top: 0px;
-            padding-bottom: 4px;
+            margin-top: 0px !important;
+            margin-bottom: 12px !important;
+            padding-top: 0px !important;
+            padding-bottom: 0px !important;
         }
         .logo-container img {
-            width: 80px;
+            width: 85px;
             height: auto;
             display: block;
+            margin-top: 0px !important;
         }
 
         /* Dark Slate Sidebar */
@@ -714,7 +730,7 @@ def main():
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
     
-    col_logo, col_title = st.columns([1, 4], vertical_alignment="top")
+    col_logo, col_title = st.columns([1, 4])
     with col_logo:
         if logo_base64:
             st.markdown(
@@ -722,7 +738,7 @@ def main():
                 unsafe_allow_html=True
             )
         else:
-            st.markdown("<h3 style='text-align: center;'>🏢 <b>BELMONT</b></h3>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align: center; margin-top: 0;'>🏢 <b>BELMONT</b></h3>", unsafe_allow_html=True)
             
     with col_title:
         st.markdown(
