@@ -626,17 +626,21 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* Centered 80px Logo Container */
+        /* Perfectly Centered (Center-Center) Logo Container with Bottom Spacing */
         .logo-container {
             display: flex;
             justify-content: center;
             align-items: center;
             width: 100%;
-            padding-top: 6px;
+            height: 100%;
+            min-height: 90px;
+            margin-bottom: 16px;
+            padding-bottom: 4px;
         }
         .logo-container img {
             width: 80px;
             height: auto;
+            display: block;
         }
 
         /* Dark Slate Sidebar */
@@ -710,7 +714,7 @@ def main():
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
     
-    col_logo, col_title = st.columns([1, 4])
+    col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
     with col_logo:
         if logo_base64:
             st.markdown(
