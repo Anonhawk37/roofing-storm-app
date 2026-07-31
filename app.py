@@ -587,15 +587,15 @@ def generate_adjuster_pdf(
 
 
 # ============================================================================
-# STREAMLIT UI WITH BELMONT GOLD BRANDING
+# STREAMLIT UI WITH HIGH-CONTRAST GOLD BRANDING
 # ============================================================================
 
 def apply_belmont_branding():
-    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding."""
+    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding and high-contrast text."""
     st.markdown(
         """
         <style>
-        /* Main background accent & header styling */
+        /* Main background & container padding */
         .main .block-container {
             padding-top: 2rem;
             max-width: 1100px;
@@ -625,25 +625,47 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* Styled Sidebar Background */
+        /* Dark Slate Sidebar for Strong Contrast */
         [data-testid="stSidebar"] {
-            background-color: #F8FAFC;
+            background-color: #1E293B;
         }
         
-        /* NOAA Metric Cards with Belmont Gold Accent */
+        /* Sidebar Headers & Field Labels in Belmont Gold */
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] .stMarkdown p {
+            color: #D4AF37 !important;
+            font-weight: 600 !important;
+        }
+        
+        /* Sidebar Divider Lines */
+        [data-testid="stSidebar"] hr {
+            border-color: #D4AF37 !important;
+            opacity: 0.3;
+        }
+
+        /* Sidebar Captions */
+        [data-testid="stSidebar"] .stCaption p {
+            color: #CBD5E1 !important;
+        }
+
+        /* Main Screen Section Banners - High Contrast White Text */
+        .section-header {
+            background-color: #1E293B;
+            color: #FFFFFF !important;
+            border-left: 5px solid #D4AF37;
+            padding: 10px 16px;
+            border-radius: 4px;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            font-size: 18px;
+            font-weight: 700 !important;
+            letter-spacing: 0.3px;
+        }
+
+        /* Metric Cards */
         [data-testid="stMetricValue"] {
             color: #D4AF37 !important;
-            font-weight: 700;
-        }
-        
-        /* Custom Section Titles with Gold Underline */
-        .section-header {
-            color: #1E293B;
-            border-bottom: 2px solid #D4AF37;
-            padding-bottom: 6px;
-            margin-top: 20px;
-            margin-bottom: 15px;
-            font-size: 18px;
             font-weight: 700;
         }
         </style>
