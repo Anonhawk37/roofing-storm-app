@@ -587,38 +587,119 @@ def generate_adjuster_pdf(
 
 
 # ============================================================================
-# STREAMLIT UI
+# STREAMLIT UI WITH BELMONT BRANDING
 # ============================================================================
+
+def apply_belmont_branding():
+    """Injects custom CSS to align Streamlit styling with Belmont Construction branding."""
+    st.markdown(
+        """
+        <style>
+        /* Main background accent & header styling */
+        .main .block-container {
+            padding-top: 2rem;
+            max-width: 1100px;
+        }
+        
+        /* Custom Header Card */
+        .belmont-header {
+            background-color: #f8fafc;
+            border-left: 5px solid #1f4788;
+            padding: 18px 24px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .belmont-title {
+            color: #1f4788;
+            font-size: 26px;
+            font-weight: 700;
+            margin: 0;
+            line-height: 1.2;
+        }
+        .belmont-subtitle {
+            color: #4a5568;
+            font-size: 14px;
+            margin-top: 4px;
+            margin-bottom: 0;
+        }
+
+        /* Styled Sidebar Headers */
+        [data-testid="stSidebar"] {
+            background-color: #f1f5f9;
+        }
+        
+        /* NOAA Metric Cards */
+        [data-testid="stMetricValue"] {
+            color: #1f4788 !important;
+            font-weight: 700;
+        }
+        
+        /* Custom Section Titles */
+        .section-header {
+            color: #1f4788;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 6px;
+            margin-top: 20px;
+            margin-bottom: 15px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 def main():
     st.set_page_config(
-        page_title="Storm & Roof Damage Inspection",
-        page_icon="🏠",
+        page_title="Belmont Construction - Inspection Suite",
+        page_icon="🏢",
         layout="wide",
         initial_sidebar_state="expanded"
     )
    
-    st.title("🏠 Storm & Roof Damage Inspection App")
-    st.markdown("**Belmont Construction** | Professional Field Inspection Tool")
-   
+    apply_belmont_branding()
+
+    # ========== BRANDED HEADER ==========
+    logo_path = os.path.abspath("BELMONT_LOGO.png")
+    
+    col_logo, col_title = st.columns([1, 4])
+    with col_logo:
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_column_width=True)
+        else:
+            st.markdown("### 🏢 **BELMONT**")
+            
+    with col_title:
+        st.markdown(
+            """
+            <div class="belmont-header">
+                <div class="belmont-title">Field Inspection & Adjuster Claims Portal</div>
+                <div class="belmont-subtitle">Belmont Construction | Adjuster-Grade Evidence & Radar Reporting</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
     if 'photo_data' not in ss:
         ss.photo_data = {cat: [] for cat in PHOTO_CATEGORIES.keys()}
    
     # ========== SIDEBAR: INSPECTOR & PROPERTY INFO ==========
     with st.sidebar:
-        st.header("📋 Inspection Details")
+        st.markdown("### 📋 Inspection Metadata")
        
-        inspector_name = st.text_input("Inspector Name", placeholder="Your Full Name", value="Matt Caesar")
-        inspector_phone = st.text_input("Inspector Direct Phone", placeholder="(555) 123-4567")
-        inspector_email = st.text_input("Inspector Email", placeholder="your.email@belmont.com")
+        inspector_name = st.text_input("Inspector Name", value="Matt Caesar")
+        inspector_phone = st.text_input("Inspector Direct Phone", placeholder="(314) 555-0199")
+        inspector_email = st.text_input("Inspector Email", placeholder="matt@belmontconstruction.com")
        
         st.divider()
-        st.subheader("Property Information")
+        st.markdown("### 📍 Property Details")
         
         # REAL-TIME LIVE ADDRESS AUTOFILL (AS YOU TYPE)
         selected_address = st_searchbox(
             search_function=search_address,
-            placeholder="Type street address...",
+            placeholder="Search address...",
             key="address_searchbox",
             clear_on_submit=False,
         )
@@ -628,7 +709,7 @@ def main():
         if not property_address:
             property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO 63101")
 
-        customer_name = st.text_input("Customer Name", placeholder="John Smith")
+        customer_name = st.text_input("Customer / Claim Name", placeholder="e.g. Smith Residence")
         
         # DATE OF LOSS CALENDAR PICKER
         dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
@@ -636,7 +717,7 @@ def main():
         
         col_date, col_btn = st.columns([2, 1])
         with col_date:
-            inspection_date_val = st.date_input("Date of Inspection", value=date.today())
+            inspection_date_val = st.date_input("Inspection Date", value=date.today())
         with col_btn:
             st.write("")
             st.write("")
@@ -652,18 +733,15 @@ def main():
         local_office = st.text_input("Local Office / Service Area", value="St. Louis, MO", placeholder="Enter city and state")
        
         st.divider()
-        st.info("💡 **Tip:** Fill out all details before uploading photos. Photos are auto-compressed to 150KB each.")
-   
+        st.caption("🔒 **Internal Tool:** Photos compress automatically to optimize layout rendering.")
+
     # ========== MAIN AREA: PHOTO UPLOAD SECTIONS ==========
-    st.header("📸 Photo Upload by Category")
-    st.markdown("Upload photos directly from your phone camera or library. Max 60 photos total.")
+    st.markdown('<div class="section-header">📷 Field Photo Documentation</div>', unsafe_allow_html=True)
    
     total_photos = 0
    
     for category_name, category_info in PHOTO_CATEGORIES.items():
-        with st.expander(f"📁 {category_name} ({category_info['description']})"):
-            st.markdown(f"*{category_info['description']}*")
-           
+        with st.expander(f"📁 {category_name} — {category_info['description']}"):
             uploaded_files = st.file_uploader(
                 f"Upload photos for {category_name}",
                 type=["jpg", "jpeg", "png"],
@@ -678,33 +756,30 @@ def main():
                 total_photos += len(processed)
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    st.success(f"✅ {len(processed)} photos uploaded & compressed")
+                    st.success(f"✅ {len(processed)} photos attached")
                 with col2:
-                    st.caption(f"~{sum(p['file_size_kb'] for p in processed):.0f} KB total")
+                    st.caption(f"Payload: ~{sum(p['file_size_kb'] for p in processed):.0f} KB")
                
                 # Show thumbnail preview
-                preview_cols = st.columns(min(3, len(processed)))
-                for idx, photo in enumerate(processed[:3]):
+                preview_cols = st.columns(min(4, len(processed)))
+                for idx, photo in enumerate(processed[:4]):
                     with preview_cols[idx % len(preview_cols)]:
-                        st.image(photo['compressed_bytes'], width=120)
+                        st.image(photo['compressed_bytes'], width=110)
            
             if not uploaded_files and ss.photo_data[category_name]:
                 ss.photo_data[category_name] = []
    
-    st.divider()
-   
     # ========== NOAA DATA & PDF GENERATION ==========
-    st.header("📊 Storm Analysis & PDF Generation")
+    st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
    
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([2, 1])
     with col1:
-        fetch_noaa = st.checkbox("Fetch NOAA Storm Radar Data", value=True)
+        fetch_noaa = st.checkbox("Include NOAA Radar & Storm Core Verification", value=True)
     with col2:
-        st.caption(f"Total photos uploaded: {total_photos}/60")
+        st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
    
     if fetch_noaa:
         noaa_data = fetch_noaa_data(property_address or "Unknown", dol or "Unknown")
-        st.success("✅ Consistent NOAA weather data calculated")
        
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -712,22 +787,22 @@ def main():
         with col2:
             st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
         with col3:
-            st.metric("Distance to Storm Core Track", f"{noaa_data['distance_from_property_miles']} mi")
+            st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
     else:
         noaa_data = None
    
     st.divider()
    
     # ========== GENERATE PDF BUTTON ==========
-    if st.button("📄 Generate Adjuster Package PDF", type="primary", use_container_width=True):
+    if st.button("📄 Build Adjuster Package (PDF)", type="primary", use_container_width=True):
         if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, dol]):
-            st.error("❌ Please fill in all inspector and property details in the sidebar.")
+            st.error("❌ Please complete required property and inspector details in the sidebar.")
         elif not noaa_data:
-            st.error("❌ Please fetch NOAA data first.")
+            st.error("❌ NOAA storm data verification is required.")
         elif total_photos == 0:
-            st.error("❌ Please upload at least one photo.")
+            st.error("❌ Upload at least one inspection photo before building the PDF.")
         else:
-            with st.spinner("🔨 Building PDF... this may take a moment with 60+ photos"):
+            with st.spinner("Compiling high-resolution report and grid layouts..."):
                 try:
                     photo_data_filtered = {k: v for k, v in ss.photo_data.items() if v}
                    
@@ -748,25 +823,23 @@ def main():
                     file_size_mb = len(pdf_bytes) / (1024 * 1024)
                    
                     st.download_button(
-                        label=f"📥 Download PDF ({file_size_mb:.1f} MB)",
+                        label=f"📥 Download Belmont Adjuster PDF ({file_size_mb:.1f} MB)",
                         data=pdf_bytes,
-                        file_name=f"Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                        file_name=f"Belmont_Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
                         mime="application/pdf",
                         use_container_width=True
                     )
                    
-                    st.success(f"✅ PDF generated successfully! ({file_size_mb:.1f} MB, {total_photos} photos)")
-                    st.info("💾 **Ready to email or share with adjuster.** Click the download button above.")
+                    st.success(f"✅ Package ready! Size: {file_size_mb:.1f} MB across {total_photos} photos.")
                    
                 except Exception as e:
-                    st.error(f"❌ Error generating PDF: {str(e)}")
+                    st.error(f"❌ PDF Compilation Error: {str(e)}")
                     st.exception(e)
    
     # ========== FOOTER ==========
     st.divider()
     st.caption(
-        "🔒 **Belmont Construction** | Storm & Roof Damage Inspection Tool | "
-        "Images auto-compressed to max 1200x900px (~150KB each) for fast delivery"
+        "© Belmont Construction | Field Representative Claim System | Confidential & Proprietary"
     )
 
 
