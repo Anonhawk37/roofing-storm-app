@@ -587,11 +587,11 @@ def generate_adjuster_pdf(
 
 
 # ============================================================================
-# STREAMLIT UI WITH BELMONT BRANDING
+# STREAMLIT UI WITH BELMONT GOLD BRANDING
 # ============================================================================
 
 def apply_belmont_branding():
-    """Injects custom CSS to align Streamlit styling with Belmont Construction branding."""
+    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding."""
     st.markdown(
         """
         <style>
@@ -601,49 +601,50 @@ def apply_belmont_branding():
             max-width: 1100px;
         }
         
-        /* Custom Header Card */
+        /* Custom Header Card with Belmont Gold Border */
         .belmont-header {
-            background-color: #f8fafc;
-            border-left: 5px solid #1f4788;
+            background-color: #FAF8F5;
+            border-left: 6px solid #D4AF37;
             padding: 18px 24px;
             border-radius: 8px;
             margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.04);
         }
         .belmont-title {
-            color: #1f4788;
+            color: #1E293B;
             font-size: 26px;
             font-weight: 700;
             margin: 0;
             line-height: 1.2;
         }
         .belmont-subtitle {
-            color: #4a5568;
-            font-size: 14px;
+            color: #D4AF37;
+            font-size: 15px;
+            font-weight: 600;
             margin-top: 4px;
             margin-bottom: 0;
         }
 
-        /* Styled Sidebar Headers */
+        /* Styled Sidebar Background */
         [data-testid="stSidebar"] {
-            background-color: #f1f5f9;
+            background-color: #F8FAFC;
         }
         
-        /* NOAA Metric Cards */
+        /* NOAA Metric Cards with Belmont Gold Accent */
         [data-testid="stMetricValue"] {
-            color: #1f4788 !important;
+            color: #D4AF37 !important;
             font-weight: 700;
         }
         
-        /* Custom Section Titles */
+        /* Custom Section Titles with Gold Underline */
         .section-header {
-            color: #1f4788;
-            border-bottom: 2px solid #e2e8f0;
+            color: #1E293B;
+            border-bottom: 2px solid #D4AF37;
             padding-bottom: 6px;
             margin-top: 20px;
             margin-bottom: 15px;
             font-size: 18px;
-            font-weight: 600;
+            font-weight: 700;
         }
         </style>
         """,
