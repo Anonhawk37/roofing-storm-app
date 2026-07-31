@@ -1,7 +1,7 @@
 """
 Storm & Roof Damage Inspection App
 Mobile-friendly field rep tool for Belmont Construction
-Generates professional adjuster-grade PDF reports with photo inspection grids
+Generates professional adjuster-grade PDF reports with photo inspection grids & High-Res Appendix
 """
 
 import os
@@ -14,6 +14,7 @@ from datetime import datetime, date
 from typing import List, Dict, Tuple
 import json
 import requests
+from streamlit_searchbox import st_searchbox
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -81,14 +82,48 @@ FOOTNOTE_STYLE = ParagraphStyle(
     textColor=colors.HexColor('#4A5568'),
     spaceAfter=4
 )
-LINK_STYLE = ParagraphStyle(
-    'CustomLink',
-    parent=STYLES['Normal'],
-    fontSize=8,
-    alignment=TA_CENTER,
-    textColor=colors.HexColor('#1F4788'),
-    spaceBefore=4
+APPENDIX_TITLE_STYLE = ParagraphStyle(
+    'AppendixTitle',
+    parent=STYLES['Heading1'],
+    fontSize=18,
+    textColor=colors.HexColor('#1f4788'),
+    spaceAfter=6,
+    fontName='Helvetica-Bold'
 )
+APPENDIX_CAPTION_STYLE = ParagraphStyle(
+    'AppendixCaption',
+    parent=STYLES['Normal'],
+    fontSize=9,
+    textColor=colors.HexColor('#2d3748'),
+    spaceBefore=4,
+    spaceAfter=6
+)
+
+# ============================================================================
+# UTILITY: LIVE ADDRESS AUTOCOMPLETE SEARCH
+# ============================================================================
+
+def search_address(search_term: str) -> List[str]:
+    """
+    Queries OpenStreetMap Nominatim API live as the user types to power real-time address autofill.
+    """
+    if not search_term or len(search_term) < 3:
+        return []
+    
+    try:
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={search_term}&addressdetails=1&limit=5&countrycodes=us"
+        headers = {'User-Agent': 'BelmontInspectionApp/1.0'}
+        response = requests.get(url, headers=headers, timeout=2.5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = [item['display_name'] for item in data]
+            return results
+    except Exception:
+        pass
+    
+    return []
+
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
@@ -272,7 +307,7 @@ def generate_adjuster_pdf(
     logo_path: str = "BELMONT_LOGO.png"
 ) -> bytes:
     """
-    Generate professional multi-page PDF inspection report.
+    Generate professional multi-page PDF inspection report with Overview Grid + High-Res Appendix.
     """
    
     pdf_buffer = io.BytesIO()
@@ -286,7 +321,18 @@ def generate_adjuster_pdf(
     )
    
     story = []
-   
+    
+    # Flatten photo list & assign reference labels for tracking
+    all_photos_flat = []
+    photo_id_counter = 1
+    for cat_name, p_list in photo_categories_data.items():
+        for p_dict in p_list:
+            item = dict(p_dict)
+            item["ref_id"] = f"A-{photo_id_counter}"
+            item["category"] = cat_name
+            all_photos_flat.append(item)
+            photo_id_counter += 1
+
     # ========== PAGE 1: HEADER + METADATA ==========
    
     logo_file = os.path.abspath(logo_path)
@@ -399,7 +445,7 @@ def generate_adjuster_pdf(
    
     story.append(PageBreak())
    
-    # ========== PAGES 2+: OPTIMIZED 2-COLUMN BORDERLESS PHOTO GRIDS ==========
+    # ========== PAGES 2+: CLEAN 2-COLUMN PHOTO GRIDS (NO LINKS) ==========
    
     for category_name, photo_list in photo_categories_data.items():
         if not photo_list:
@@ -409,7 +455,7 @@ def generate_adjuster_pdf(
         story.append(category_heading)
         story.append(Spacer(1, 0.15*inch))
        
-        # Switch to 2-column layout per row for substantially larger images (3.25" width per image)
+        # 2-column clean grid layout (3.25" width per image)
         for i in range(0, len(photo_list), 2):
             row_photos = photo_list[i:i+2]
             row_data = []
@@ -417,14 +463,12 @@ def generate_adjuster_pdf(
             for photo_dict in row_photos:
                 try:
                     img_bytes = photo_dict['compressed_bytes']
-                    # Larger, crisp image scaling (3.15" max width)
-                    img = get_aspect_rl_image(img_bytes, max_w_inches=3.15, max_h_inches=2.25)
                     
-                    # Clean hyperlinked action label under image
-                    link_text = Paragraph("<b>🔍 Enlarge Full-Res Image</b>", LINK_STYLE)
+                    # Clean crisp grid image scaling
+                    img = get_aspect_rl_image(img_bytes, max_w_inches=3.25, max_h_inches=2.35)
                     
                     cell_stack = Table(
-                        [[img], [link_text]],
+                        [[img]],
                         colWidths=[3.25*inch]
                     )
                     cell_stack.setStyle(TableStyle([
@@ -459,7 +503,43 @@ def generate_adjuster_pdf(
        
         if category_name != list(photo_categories_data.keys())[-1]:
             story.append(PageBreak())
-   
+
+    # ========== APPENDIX: HIGH-RESOLUTION EVIDENCE VAULT (NO LINKS) ==========
+    if all_photos_flat:
+        story.append(PageBreak())
+        story.append(Paragraph("APPENDIX: High-Resolution Evidence Vault", APPENDIX_TITLE_STYLE))
+        story.append(Paragraph(
+            "<i>The photos below are embedded in full resolution to allow precise adjuster examination, zoom analysis, "
+            "and raw JPEG extraction for insurance claim evaluation.</i>",
+            APPENDIX_CAPTION_STYLE
+        ))
+        story.append(Spacer(1, 0.15*inch))
+
+        for idx, item in enumerate(all_photos_flat):
+            ref_id = item["ref_id"]
+            cat_name = item["category"]
+            filename = item["filename"]
+            img_bytes = item["compressed_bytes"]
+
+            header_paragraph = Paragraph(f"<b>Photo Reference {ref_id}</b> — <i>{cat_name}</i>", HEADING_STYLE)
+            
+            # Full-Page Large Image (7.0 x 5.0 inches max)
+            app_img = get_aspect_rl_image(img_bytes, max_w_inches=7.0, max_h_inches=5.0)
+
+            appendix_block = [
+                header_paragraph,
+                Spacer(1, 4),
+                app_img,
+                Spacer(1, 4),
+                Paragraph(f"<b>File Reference:</b> {filename} | <b>Category:</b> {cat_name}", FOOTNOTE_STYLE),
+                Spacer(1, 8)
+            ]
+
+            story.append(KeepTogether(appendix_block))
+
+            if idx < len(all_photos_flat) - 1:
+                story.append(Spacer(1, 0.25*inch))
+
     doc.build(story)
     pdf_bytes = pdf_buffer.getvalue()
    
@@ -495,22 +575,19 @@ def main():
         st.divider()
         st.subheader("Property Information")
         
-        # ACTIVE ADDRESS AUTOFILL SEARCH ENGINE
-        address_query = st.text_input("Search Property Address", value="", placeholder="Type street address...", help="Enter address to query geocoder")
+        # REAL-TIME LIVE ADDRESS AUTOFILL (AS YOU TYPE)
+        selected_address = st_searchbox(
+            search_function=search_address,
+            placeholder="Type street address...",
+            key="address_searchbox",
+            clear_on_submit=False,
+        )
         
-        selected_address = address_query
-        if len(address_query) >= 4:
-            try:
-                url = f"https://nominatim.openstreetmap.org/search?format=json&q={address_query}"
-                headers = {'User-Agent': 'BelmontInspectionApp/1.0'}
-                resp = requests.get(url, headers=headers, timeout=3).json()
-                if resp:
-                    options = [item['display_name'] for item in resp]
-                    selected_address = st.selectbox("Select Verified Address", options)
-            except Exception:
-                selected_address = address_query
+        # Fallback if manual address entry is needed
+        property_address = selected_address if selected_address else ""
+        if not property_address:
+            property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO")
 
-        property_address = selected_address
         customer_name = st.text_input("Customer Name", placeholder="John Smith")
         
         # DATE OF LOSS CALENDAR PICKER
