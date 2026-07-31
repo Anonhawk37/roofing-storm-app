@@ -6,6 +6,7 @@ Generates professional adjuster-grade PDF reports with photo inspection grids & 
 
 import os
 import hashlib
+import base64
 import streamlit as st
 from streamlit import session_state as ss
 from PIL import Image, ImageOps
@@ -100,6 +101,20 @@ APPENDIX_CAPTION_STYLE = ParagraphStyle(
 )
 
 # ============================================================================
+# UTILITY: BASE64 IMAGE ENCODER FOR HTML INJECTION
+# ============================================================================
+
+def get_image_base64(image_path: str) -> str:
+    """Reads a local image file and converts it into a base64 Data URI for inline HTML rendering."""
+    if not os.path.exists(image_path):
+        return ""
+    with open(image_path, "rb") as img_file:
+        encoded = base64.b64encode(img_file.read()).decode("utf-8")
+    ext = os.path.splitext(image_path)[1].replace(".", "").lower()
+    mime_type = "jpeg" if ext in ["jpg", "jpeg"] else ext
+    return f"data:image/{mime_type};base64,{encoded}"
+
+# ============================================================================
 # UTILITY: CLEAN & FORMAT ADDRESSES (WITH ZIP CODE)
 # ============================================================================
 
@@ -119,13 +134,11 @@ def format_clean_address(raw_address: str) -> str:
     
     for p in parts:
         p_lower = p.lower()
-        # Filter out country names and county tags
         if p_lower in ["united states", "united states of america", "usa", "us"]:
             continue
         if "county" in p_lower:
             continue
             
-        # Extract 5-digit or 9-digit ZIP code
         if p.isdigit() and len(p) in [5, 9]:
             zip_code = p
             continue
@@ -134,7 +147,6 @@ def format_clean_address(raw_address: str) -> str:
         
     base_address = ", ".join(filtered_parts)
     
-    # Append ZIP code at the end if present
     if zip_code and not base_address.endswith(zip_code):
         return f"{base_address} {zip_code}"
     
@@ -180,10 +192,10 @@ def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, 
     try:
         img = Image.open(uploaded_file)
         
-        # Handle EXIF orientation tags (prevents iPhone portrait photos from flipping sideways)
+        # Handle EXIF orientation tags
         img = ImageOps.exif_transpose(img)
        
-        # Convert RGBA to RGB if needed (for JPEG compatibility)
+        # Convert RGBA to RGB if needed
         if img.mode in ('RGBA', 'LA', 'P'):
             rgb_img = Image.new('RGB', img.size, (255, 255, 255))
             rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
@@ -248,7 +260,6 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
         for file in uploaded_files:
             compressed_bytes, size_kb = compress_image(file)
             if compressed_bytes:
-                # Keep reference for PDF insertion
                 img_bytes = io.BytesIO(compressed_bytes)
                 img_obj = Image.open(img_bytes)
                
@@ -271,11 +282,9 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
     Fetches consistent, deterministic weather data derived from property address and date of loss hash.
     Eliminates random value shifts between report runs.
     """
-    # Create unique seed from address + date string
     seed_str = f"{address.lower().strip()}_{dol}".encode('utf-8')
     hash_val = int(hashlib.md5(seed_str).hexdigest(), 16)
     
-    # Deterministic values derived from hash
     hail_sizes = [1.00, 1.25, 1.50, 1.75, 2.00, 2.25]
     directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
     
@@ -364,7 +373,6 @@ def generate_adjuster_pdf(
    
     story = []
     
-    # Flatten photo list & assign reference labels for tracking
     all_photos_flat = []
     photo_id_counter = 1
     for cat_name, p_list in photo_categories_data.items():
@@ -417,7 +425,7 @@ def generate_adjuster_pdf(
     story.append(header_table)
     story.append(Spacer(1, 0.2*inch))
    
-    # Property Metadata Section (Wrapped in Paragraphs for Clean Text Wrapping)
+    # Property Metadata Section
     metadata_title = Paragraph("PROPERTY INSPECTION DETAILS", TITLE_STYLE)
     story.append(metadata_title)
    
@@ -485,7 +493,7 @@ def generate_adjuster_pdf(
    
     story.append(PageBreak())
    
-    # ========== PAGES 2+: CLEAN 2-COLUMN PHOTO GRIDS (NO LINKS) ==========
+    # ========== PAGES 2+: CLEAN 2-COLUMN PHOTO GRIDS ==========
    
     for category_name, photo_list in photo_categories_data.items():
         if not photo_list:
@@ -495,7 +503,6 @@ def generate_adjuster_pdf(
         story.append(category_heading)
         story.append(Spacer(1, 0.15*inch))
        
-        # 2-column clean grid layout (3.25" width per image)
         for i in range(0, len(photo_list), 2):
             row_photos = photo_list[i:i+2]
             row_data = []
@@ -503,8 +510,6 @@ def generate_adjuster_pdf(
             for photo_dict in row_photos:
                 try:
                     img_bytes = photo_dict['compressed_bytes']
-                    
-                    # Clean crisp grid image scaling
                     img = get_aspect_rl_image(img_bytes, max_w_inches=3.25, max_h_inches=2.35)
                     
                     cell_stack = Table(
@@ -523,11 +528,9 @@ def generate_adjuster_pdf(
                 except Exception as e:
                     row_data.append(Paragraph(f"<font size=8>Image Error</font>", NORMAL_STYLE))
            
-            # Pad row if single photo
             while len(row_data) < 2:
                 row_data.append(Paragraph("", NORMAL_STYLE))
            
-            # Clean borderless grid table
             grid_table = Table([row_data], colWidths=[3.4*inch, 3.4*inch])
             grid_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -544,7 +547,7 @@ def generate_adjuster_pdf(
         if category_name != list(photo_categories_data.keys())[-1]:
             story.append(PageBreak())
 
-    # ========== APPENDIX: HIGH-RESOLUTION EVIDENCE VAULT (NO LINKS) ==========
+    # ========== APPENDIX: HIGH-RESOLUTION EVIDENCE VAULT ==========
     if all_photos_flat:
         story.append(PageBreak())
         story.append(Paragraph("APPENDIX: High-Resolution Evidence Vault", APPENDIX_TITLE_STYLE))
@@ -562,8 +565,6 @@ def generate_adjuster_pdf(
             img_bytes = item["compressed_bytes"]
 
             header_paragraph = Paragraph(f"<b>Photo Reference {ref_id}</b> — <i>{cat_name}</i>", HEADING_STYLE)
-            
-            # Full-Page Large Image (7.0 x 5.0 inches max)
             app_img = get_aspect_rl_image(img_bytes, max_w_inches=7.0, max_h_inches=5.0)
 
             appendix_block = [
@@ -638,7 +639,7 @@ def apply_belmont_branding():
             height: auto;
         }
 
-        /* Dark Slate Sidebar Reverted */
+        /* Dark Slate Sidebar */
         [data-testid="stSidebar"] {
             background-color: #1E293B !important;
         }
@@ -707,12 +708,13 @@ def main():
 
     # ========== BRANDED HEADER ==========
     logo_path = os.path.abspath("BELMONT_LOGO.png")
+    logo_base64 = get_image_base64(logo_path)
     
     col_logo, col_title = st.columns([1, 4])
     with col_logo:
-        if os.path.exists(logo_path):
+        if logo_base64:
             st.markdown(
-                f'<div class="logo-container"><img src="app/static/BELMONT_LOGO.png" alt="Belmont Logo"></div>',
+                f'<div class="logo-container"><img src="{logo_base64}" alt="Belmont Logo"></div>',
                 unsafe_allow_html=True
             )
         else:
@@ -751,7 +753,6 @@ def main():
             clear_on_submit=False,
         )
         
-        # Fallback if manual address entry is needed
         property_address = format_clean_address(selected_address) if selected_address else ""
         if not property_address:
             property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO 63101")
@@ -807,7 +808,6 @@ def main():
                 with col2:
                     st.caption(f"Payload: ~{sum(p['file_size_kb'] for p in processed):.0f} KB")
                
-                # Show thumbnail preview
                 preview_cols = st.columns(min(4, len(processed)))
                 for idx, photo in enumerate(processed[:4]):
                     with preview_cols[idx % len(preview_cols)]:
