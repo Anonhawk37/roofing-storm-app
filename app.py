@@ -598,7 +598,7 @@ def apply_belmont_branding():
         <style>
         /* Main background & container padding */
         .main .block-container {
-            padding-top: 2rem;
+            padding-top: 1.5rem;
             max-width: 1100px;
         }
 
@@ -626,15 +626,15 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* Perfectly Centered (Center-Center) Logo Container with Bottom Spacing */
+        /* Top-Aligned Logo Container with Reduced Top Margin */
         .logo-container {
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             width: 100%;
-            height: 100%;
-            min-height: 90px;
+            margin-top: -4px;
             margin-bottom: 16px;
+            padding-top: 0px;
             padding-bottom: 4px;
         }
         .logo-container img {
@@ -714,7 +714,7 @@ def main():
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
     
-    col_logo, col_title = st.columns([1, 4], vertical_alignment="center")
+    col_logo, col_title = st.columns([1, 4], vertical_alignment="top")
     with col_logo:
         if logo_base64:
             st.markdown(
