@@ -637,6 +637,14 @@ def apply_belmont_branding():
             color: #D4AF37 !important;
             font-weight: 600 !important;
         }
+
+        /* Radio Buttons Under Report Type - Belmont Gold Style */
+        [data-testid="stSidebar"] [data-testid="stRadioButton"] p,
+        [data-testid="stSidebar"] [data-testid="stRadioButton"] label {
+            color: #D4AF37 !important;
+            font-size: 14px !important;
+            font-weight: 500 !important;
+        }
         
         /* Sidebar Divider Lines */
         [data-testid="stSidebar"] hr {
@@ -690,12 +698,12 @@ def main():
     col_logo, col_title = st.columns([1.5, 4])
     with col_logo:
         if os.path.exists(logo_path):
-            # Centered image layout using 3 sub-columns
-            _, img_col, _ = st.columns([1, 2, 1])
-            with img_col:
-                st.image(logo_path, width=130)
+            # Centered image layout inside column with flex alignment
+            sub_col1, sub_col2, sub_col3 = st.columns([1, 2, 1])
+            with sub_col2:
+                st.image(logo_path, use_container_width=True)
         else:
-            st.markdown("### 🏢 **BELMONT**")
+            st.markdown("<h3 style='text-align: center;'>🏢 <b>BELMONT</b></h3>", unsafe_allow_html=True)
             
     with col_title:
         st.markdown(
