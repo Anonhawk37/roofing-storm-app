@@ -100,12 +100,50 @@ APPENDIX_CAPTION_STYLE = ParagraphStyle(
 )
 
 # ============================================================================
-# UTILITY: LIVE ADDRESS AUTOCOMPLETE SEARCH
+# UTILITY: CLEAN & FORMAT ADDRESSES (WITH ZIP CODE)
 # ============================================================================
+
+def format_clean_address(raw_address: str) -> str:
+    """
+    Cleans raw geocoder strings by removing country and county names,
+    while retaining 5-digit ZIP codes to keep text concise and table-safe.
+    Example Input: '123 Main St, St. Louis, St. Louis County, Missouri, 63101, United States'
+    Example Output: '123 Main St, St. Louis, MO 63101'
+    """
+    if not raw_address:
+        return ""
+    
+    parts = [p.strip() for p in raw_address.split(",")]
+    filtered_parts = []
+    zip_code = ""
+    
+    for p in parts:
+        p_lower = p.lower()
+        # Filter out country names and county tags
+        if p_lower in ["united states", "united states of america", "usa", "us"]:
+            continue
+        if "county" in p_lower:
+            continue
+            
+        # Extract 5-digit or 9-digit ZIP code
+        if p.isdigit() and len(p) in [5, 9]:
+            zip_code = p
+            continue
+            
+        filtered_parts.append(p)
+        
+    base_address = ", ".join(filtered_parts)
+    
+    # Append ZIP code at the end if present
+    if zip_code and not base_address.endswith(zip_code):
+        return f"{base_address} {zip_code}"
+    
+    return base_address
+
 
 def search_address(search_term: str) -> List[str]:
     """
-    Queries OpenStreetMap Nominatim API live as the user types to power real-time address autofill.
+    Queries OpenStreetMap Nominatim API live as the user types and returns cleanly formatted addresses.
     """
     if not search_term or len(search_term) < 3:
         return []
@@ -117,7 +155,11 @@ def search_address(search_term: str) -> List[str]:
         
         if response.status_code == 200:
             data = response.json()
-            results = [item['display_name'] for item in data]
+            results = []
+            for item in data:
+                clean_addr = format_clean_address(item.get('display_name', ''))
+                if clean_addr and clean_addr not in results:
+                    results.append(clean_addr)
             return results
     except Exception:
         pass
@@ -375,29 +417,27 @@ def generate_adjuster_pdf(
     story.append(header_table)
     story.append(Spacer(1, 0.2*inch))
    
-    # Property Metadata Section
+    # Property Metadata Section (Wrapped in Paragraphs for Clean Text Wrapping)
     metadata_title = Paragraph("PROPERTY INSPECTION DETAILS", TITLE_STYLE)
     story.append(metadata_title)
    
     metadata_data = [
-        ["Property Address:", property_address],
-        ["Customer Name:", customer_name],
-        ["Date of Loss (DOL):", dol],
-        ["Inspection Date:", inspection_date],
-        ["Report Type:", report_type],
+        [Paragraph("<b>Property Address:</b>", NORMAL_STYLE), Paragraph(property_address, NORMAL_STYLE)],
+        [Paragraph("<b>Customer Name:</b>", NORMAL_STYLE), Paragraph(customer_name, NORMAL_STYLE)],
+        [Paragraph("<b>Date of Loss (DOL):</b>", NORMAL_STYLE), Paragraph(dol, NORMAL_STYLE)],
+        [Paragraph("<b>Inspection Date:</b>", NORMAL_STYLE), Paragraph(inspection_date, NORMAL_STYLE)],
+        [Paragraph("<b>Report Type:</b>", NORMAL_STYLE), Paragraph(report_type, NORMAL_STYLE)],
     ]
    
     metadata_table = Table(metadata_data, colWidths=[2*inch, 4.5*inch])
     metadata_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
         ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')]),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('LEFTPADDING', (0, 0), (-1, -1), 8),
         ('RIGHTPADDING', (0, 0), (-1, -1), 8),
         ('TOPPADDING', (0, 0), (-1, -1), 4),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
    
     story.append(metadata_table)
@@ -584,9 +624,9 @@ def main():
         )
         
         # Fallback if manual address entry is needed
-        property_address = selected_address if selected_address else ""
+        property_address = format_clean_address(selected_address) if selected_address else ""
         if not property_address:
-            property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO")
+            property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO 63101")
 
         customer_name = st.text_input("Customer Name", placeholder="John Smith")
         
