@@ -7,6 +7,8 @@ Generates professional adjuster-grade PDF reports with photo inspection grids & 
 import os
 import hashlib
 import base64
+import re
+import urllib.parse
 import streamlit as st
 from streamlit import session_state as ss
 from PIL import Image, ImageOps
@@ -15,7 +17,6 @@ from datetime import datetime, date
 from typing import List, Dict, Tuple
 import json
 import requests
-from streamlit_searchbox import st_searchbox
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -72,6 +73,10 @@ CARRIER_HOTLINES = [
     ("Farm Bureau", "18002266383"),
     ("American Modern", "18003752075")
 ]
+
+HEADERS = {
+    'User-Agent': 'BelmontConstructionInspectionApp/3.0 (contact@belmontconstruction.com)'
+}
 
 # ReportLab styles
 STYLES = getSampleStyleSheet()
@@ -136,92 +141,58 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: CLEAN & FORMAT ADDRESSES (WITH ZIP CODE & COMMA CLEANING)
+# UTILITY: CLEAN & GEOCODE ADDRESS ON DEMAND ONLY
 # ============================================================================
 
 def format_clean_address(raw_address: str) -> str:
-    """
-    Cleans raw geocoder strings by removing country/county names and stripping 
-    erroneous commas between street numbers and names.
-    Example Input: '123, Main St, St. Louis, St. Louis County, Missouri, 63101, United States'
-    Example Output: '123 Main St, St. Louis, MO 63101'
-    """
+    """Cleans raw geocoder strings by removing country/county names."""
     if not raw_address:
         return ""
     
     parts = [p.strip() for p in raw_address.split(",") if p.strip()]
-    
     if len(parts) > 1 and parts[0].isdigit():
         parts[0] = f"{parts[0]} {parts[1]}"
         parts.pop(1)
 
     filtered_parts = []
     zip_code = ""
-    
     for p in parts:
         p_lower = p.lower()
         if p_lower in ["united states", "united states of america", "usa", "us"]:
             continue
         if "county" in p_lower:
             continue
-            
         if p.isdigit() and len(p) in [5, 9]:
             zip_code = p
             continue
-            
         filtered_parts.append(p)
         
     base_address = ", ".join(filtered_parts)
-    
     if zip_code and not base_address.endswith(zip_code):
         return f"{base_address} {zip_code}"
-    
     return base_address
 
 
-def search_address(search_term: str) -> List[str]:
-    """
-    Queries OpenStreetMap Nominatim API live as the user types and returns cleanly formatted addresses.
-    """
-    if not search_term or len(search_term) < 3:
-        return []
-    
-    try:
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={search_term}&addressdetails=1&limit=5&countrycodes=us"
-        headers = {'User-Agent': 'BelmontConstructionInspectionApp/2.0 (contact@belmontconstruction.com)'}
-        response = requests.get(url, headers=headers, timeout=5.0)
-        
-        if response.status_code == 200:
-            data = response.json()
-            results = []
-            for item in data:
-                clean_addr = format_clean_address(item.get('display_name', ''))
-                if clean_addr and clean_addr not in results:
-                    results.append(clean_addr)
-            return results
-    except Exception:
-        pass
-    
-    return []
+def clean_address_for_nominatim(address_str: str) -> str:
+    """Removes suite/apt/unit numbers that cause Nominatim match failures."""
+    cleaned = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip(', ')
+    return cleaned
 
 
-def geocode_address(address_str: str) -> Tuple[float, float, str]:
+def geocode_address_on_demand(address_str: str) -> Tuple[float, float, str]:
     """
-    Converts property address to (latitude, longitude, matched_display_name).
-    Includes fallbacks to prevent locking onto St. Louis City Hall.
+    Geocodes address ONLY when called on button click.
     """
     if not address_str or len(address_str.strip()) < 3:
         return 38.6270, -90.1994, "St. Louis, MO (Default)"
     
-    headers = {
-        'User-Agent': 'BelmontConstructionInspectionApp/2.0 (contact@belmontconstruction.com)'
-    }
+    cleaned_addr = clean_address_for_nominatim(address_str)
     
-    # Attempt 1: Direct query with the provided address
+    # Attempt 1: Full Query
     try:
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address_str)}&limit=1&countrycodes=us"
-        res = requests.get(url, headers=headers, timeout=5.0)
-        
+        url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(cleaned_addr)}&format=json&countrycodes=us&limit=1"
+        res = requests.get(url, headers=HEADERS, timeout=5.0)
         if res.status_code == 200 and res.json():
             data = res.json()[0]
             clean_matched = format_clean_address(data.get('display_name', ''))
@@ -229,14 +200,13 @@ def geocode_address(address_str: str) -> Tuple[float, float, str]:
     except Exception:
         pass
 
-    # Attempt 2: Fallback query if formatting was too strict
+    # Attempt 2: Simplified Fallback Query
     try:
-        # Simplifies address by taking first and last components if available
-        parts = [p.strip() for p in address_str.split(',') if p.strip()]
+        parts = [p.strip() for p in cleaned_addr.split(',') if p.strip()]
         if len(parts) > 2:
             simplified = f"{parts[0]}, {parts[-1]}"
-            url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(simplified)}&limit=1&countrycodes=us"
-            res = requests.get(url, headers=headers, timeout=5.0)
+            url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(simplified)}&format=json&countrycodes=us&limit=1"
+            res = requests.get(url, headers=HEADERS, timeout=5.0)
             if res.status_code == 200 and res.json():
                 data = res.json()[0]
                 clean_matched = format_clean_address(data.get('display_name', ''))
@@ -251,11 +221,6 @@ def geocode_address(address_str: str) -> Tuple[float, float, str]:
 # ============================================================================
 
 def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, quality: int = 75) -> Tuple[bytes, int]:
-    """
-    Compress image to max dimensions and quality to keep file size small (~150KB each).
-    Fixes EXIF rotation bugs for iPhone portrait photos.
-    Returns (compressed_bytes, file_size_kb)
-    """
     try:
         img = Image.open(uploaded_file)
         img = ImageOps.exif_transpose(img)
@@ -279,9 +244,6 @@ def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, 
 
 
 def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> RLImage:
-    """
-    Calculates proportion-preserving dimensions for ReportLab images to prevent squishing or stretching.
-    """
     if isinstance(img_input, bytes):
         pil_img = Image.open(io.BytesIO(img_input))
         img_source = io.BytesIO(img_input)
@@ -312,48 +274,33 @@ def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> 
 
 
 def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
-    """
-    Process and compress multiple uploaded photos.
-    Returns list of dicts with: {filename, compressed_bytes, file_size_kb, image_obj}
-    """
     processed_photos = []
-   
     if uploaded_files:
         for file in uploaded_files:
             compressed_bytes, size_kb = compress_image(file)
             if compressed_bytes:
                 img_bytes = io.BytesIO(compressed_bytes)
                 img_obj = Image.open(img_bytes)
-               
                 processed_photos.append({
                     "filename": file.name,
                     "compressed_bytes": compressed_bytes,
                     "file_size_kb": size_kb,
                     "image_obj": img_obj
                 })
-   
     return processed_photos
 
-
 # ============================================================================
-# UTILITY: REAL-TIME MULTI-SOURCE WEATHER DATA ENGINE (OPEN-METEO + IEM/NOAA)
+# UTILITY: WEATHER DATA ENGINE (USES STORED GEODATA)
 # ============================================================================
 
-def fetch_noaa_data(address: str, dol: str) -> Dict:
-    """
-    Fetches real weather data from multiple open databases (Open-Meteo & Iowa Environmental Mesonet / NWS radar logs),
-    cross-references the results, picks maximum recorded storm impact metrics, and builds citations.
-    """
-    lat, lon, matched_addr = geocode_address(address)
-    
-    # Defaults
+def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict:
     max_wind_mph = 52.0
     max_hail_in = 1.25
     dbz = 52
     primary_source = "Open-Meteo Historical Weather API & IEM / NWS Radar Archive"
     citation_notes = []
 
-    # Source 1: Open-Meteo Historical API Query
+    # Source 1: Open-Meteo
     try:
         om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
         res = requests.get(om_url, timeout=3.0)
@@ -369,7 +316,7 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
     except Exception:
         pass
 
-    # Source 2: IEM / NWS Severe Local Storm Reports & Radar MESH Archive
+    # Source 2: IEM / NWS Reports
     try:
         iem_url = f"https://mesonet.agron.iastate.edu/geojson/lsr.php?sts={dol}T00:00Z&ets={dol}T23:59Z"
         res_iem = requests.get(iem_url, timeout=3.0)
@@ -392,7 +339,6 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
         pass
 
     dbz = int(48 + (max_hail_in * 8))
-    
     if not citation_notes:
         citation_notes.append("Cross-referenced across Open-Meteo Weather Engine & IEM NEXRAD Severe Weather Archive.")
 
@@ -415,9 +361,6 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
 
 
 def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_date: str, property_address: str, dol: str) -> str:
-    """
-    Generate AI/Consultant-style storm impact risk assessment based on NOAA data and Report Type choice.
-    """
     hail = noaa_data["peak_hail_size_inches"]
     wind = noaa_data["wind_gust_speed_mph"]
    
@@ -447,7 +390,6 @@ def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_da
         )
     return summary
 
-
 # ============================================================================
 # CORE: PDF GENERATION WITH REPORTLAB
 # ============================================================================
@@ -466,10 +408,6 @@ def generate_adjuster_pdf(
     photo_categories_data: Dict[str, List[Dict]],
     logo_path: str = "BELMONT_LOGO.png"
 ) -> bytes:
-    """
-    Generate professional multi-page PDF inspection report with Overview Grid + High-Res Appendix.
-    """
-   
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         pdf_buffer,
@@ -492,8 +430,7 @@ def generate_adjuster_pdf(
             all_photos_flat.append(item)
             photo_id_counter += 1
 
-    # ========== PAGE 1: HEADER + METADATA ==========
-   
+    # PAGE 1: HEADER & METADATA
     logo_file = os.path.abspath(logo_path)
     if os.path.exists(logo_file):
         company_header_element = get_aspect_rl_image(logo_file, max_w_inches=2.2, max_h_inches=0.75)
@@ -534,7 +471,6 @@ def generate_adjuster_pdf(
     story.append(header_table)
     story.append(Spacer(1, 0.2*inch))
    
-    # Property Metadata Section
     metadata_title = Paragraph("PROPERTY INSPECTION DETAILS", TITLE_STYLE)
     story.append(metadata_title)
    
@@ -560,7 +496,6 @@ def generate_adjuster_pdf(
     story.append(metadata_table)
     story.append(Spacer(1, 0.2*inch))
    
-    # NOAA Radar Data Table
     noaa_title = Paragraph("NOAA & METEOROLOGICAL RADAR ANALYSIS", TITLE_STYLE)
     story.append(noaa_title)
    
@@ -594,7 +529,6 @@ def generate_adjuster_pdf(
     story.append(Paragraph(f"*<i>Citation Footnote: {noaa_data.get('citation_details', '')} Distance to Storm Core Track measures proximity between property coordinates and the max radar reflectivity cell.</i>", FOOTNOTE_STYLE))
     story.append(Spacer(1, 0.15*inch))
    
-    # Storm Risk Summary
     risk_title = Paragraph("STORM IMPACT ASSESSMENT", TITLE_STYLE)
     story.append(risk_title)
    
@@ -603,8 +537,7 @@ def generate_adjuster_pdf(
    
     story.append(PageBreak())
    
-    # ========== PAGES 2+: CLEAN 2-COLUMN PHOTO GRIDS ==========
-   
+    # PHOTO GRIDS
     for category_name, photo_list in photo_categories_data.items():
         if not photo_list:
             continue
@@ -622,10 +555,7 @@ def generate_adjuster_pdf(
                     img_bytes = photo_dict['compressed_bytes']
                     img = get_aspect_rl_image(img_bytes, max_w_inches=3.25, max_h_inches=2.35)
                     
-                    cell_stack = Table(
-                        [[img]],
-                        colWidths=[3.25*inch]
-                    )
+                    cell_stack = Table([[img]], colWidths=[3.25*inch])
                     cell_stack.setStyle(TableStyle([
                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -633,10 +563,9 @@ def generate_adjuster_pdf(
                         ('TOPPADDING', (0, 0), (-1, -1), 6),
                         ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
                     ]))
-                   
                     row_data.append(cell_stack)
-                except Exception as e:
-                    row_data.append(Paragraph(f"<font size=8>Image Error</font>", NORMAL_STYLE))
+                except Exception:
+                    row_data.append(Paragraph("<font size=8>Image Error</font>", NORMAL_STYLE))
            
             while len(row_data) < 2:
                 row_data.append(Paragraph("", NORMAL_STYLE))
@@ -657,7 +586,7 @@ def generate_adjuster_pdf(
         if category_name != list(photo_categories_data.keys())[-1]:
             story.append(PageBreak())
 
-    # ========== APPENDIX: HIGH-RESOLUTION EVIDENCE VAULT ==========
+    # APPENDIX
     if all_photos_flat:
         story.append(PageBreak())
         story.append(Paragraph("APPENDIX: High-Resolution Evidence Vault", APPENDIX_TITLE_STYLE))
@@ -692,27 +621,21 @@ def generate_adjuster_pdf(
                 story.append(Spacer(1, 0.25*inch))
 
     doc.build(story)
-    pdf_bytes = pdf_buffer.getvalue()
-   
-    return pdf_bytes
-
+    return pdf_buffer.getvalue()
 
 # ============================================================================
 # STREAMLIT UI WITH DARK SLATE SIDEBAR & GOLD BRANDING
 # ============================================================================
 
 def apply_belmont_branding():
-    """Injects custom CSS to align Streamlit styling with Belmont Construction Gold branding and Dark Slate Sidebar."""
     st.markdown(
         """
         <style>
-        /* Main background & container padding */
         .main .block-container {
             padding-top: 1.5rem;
             max-width: 1100px;
         }
 
-        /* OVERRIDE STREAMLIT FLEX COLUMN ALIGNMENT FOR TOP LOGO ALIGNMENT */
         [data-testid="stHorizontalBlock"] {
             align-items: flex-start !important;
         }
@@ -726,7 +649,6 @@ def apply_belmont_branding():
             margin-top: 0px !important;
         }
 
-        /* Custom Header Card with Belmont Gold Border */
         .belmont-header {
             background-color: #FAF8F5;
             border-left: 6px solid #D4AF37;
@@ -751,7 +673,6 @@ def apply_belmont_branding():
             margin-bottom: 0;
         }
 
-        /* Strict Top-Aligned Logo Container */
         .logo-container {
             display: flex !important;
             justify-content: center !important;
@@ -769,12 +690,10 @@ def apply_belmont_branding():
             margin-top: 0px !important;
         }
 
-        /* Dark Slate Sidebar */
         [data-testid="stSidebar"] {
             background-color: #1E293B !important;
         }
         
-        /* Sidebar Headers & Field Labels in Belmont Gold */
         [data-testid="stSidebar"] h3,
         [data-testid="stSidebar"] label,
         [data-testid="stSidebar"] .stMarkdown p {
@@ -782,7 +701,6 @@ def apply_belmont_branding():
             font-weight: 600 !important;
         }
 
-        /* Radio Buttons Under Report Type - Belmont Gold Style */
         [data-testid="stSidebar"] [data-testid="stRadioButton"] p,
         [data-testid="stSidebar"] [data-testid="stRadioButton"] label {
             color: #D4AF37 !important;
@@ -790,18 +708,15 @@ def apply_belmont_branding():
             font-weight: 500 !important;
         }
         
-        /* Sidebar Divider Lines */
         [data-testid="stSidebar"] hr {
             border-color: #D4AF37 !important;
             opacity: 0.3;
         }
 
-        /* Sidebar Captions */
         [data-testid="stSidebar"] .stCaption p {
             color: #CBD5E1 !important;
         }
 
-        /* Main Screen Section Banners - High Contrast White Text */
         .section-header {
             background-color: #1E293B;
             color: #FFFFFF !important;
@@ -815,7 +730,6 @@ def apply_belmont_branding():
             letter-spacing: 0.3px;
         }
 
-        /* GPS Verification Box */
         .gps-verification-box {
             background-color: #1E293B;
             border: 1px solid #D4AF37;
@@ -847,7 +761,6 @@ def apply_belmont_branding():
             font-size: 0.85rem;
         }
 
-        /* Call in Claims Grid Buttons */
         .carrier-call-btn {
             display: flex;
             align-items: center;
@@ -870,7 +783,6 @@ def apply_belmont_branding():
             color: #1E293B !important;
         }
 
-        /* Metric Cards */
         [data-testid="stMetricValue"] {
             color: #D4AF37 !important;
             font-weight: 700;
@@ -891,7 +803,7 @@ def main():
    
     apply_belmont_branding()
 
-    # ========== BRANDED HEADER ==========
+    # HEADER LOGO & TITLE
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
     
@@ -916,10 +828,15 @@ def main():
             unsafe_allow_html=True
         )
 
+    # INITIALIZE SESSION STATE FOR PERSISTENT DATA
     if 'photo_data' not in ss:
         ss.photo_data = {cat: [] for cat in PHOTO_CATEGORIES.keys()}
-   
-    # ========== SIDEBAR: INSPECTOR & PROPERTY INFO ==========
+    if 'geocoded_data' not in ss:
+        ss.geocoded_data = None
+    if 'raw_address_input' not in ss:
+        ss.raw_address_input = ""
+
+    # SIDEBAR INPUTS
     with st.sidebar:
         st.markdown("### 📋 Inspection Metadata")
        
@@ -930,21 +847,30 @@ def main():
         st.divider()
         st.markdown("### 📍 Property Details")
         
-        # REAL-TIME LIVE ADDRESS AUTOFILL (AS YOU TYPE)
-        selected_address = st_searchbox(
-            search_function=search_address,
-            placeholder="Search address...",
-            key="address_searchbox",
-            clear_on_submit=False,
+        # 1. SIMPLE TEXT INPUT FOR ADDRESS (AUTO-UPDATES TEXT INPUT INSTANTLY)
+        property_address = st.text_input(
+            "Property Address", 
+            value=ss.raw_address_input,
+            placeholder="123 Main St, St. Louis, MO 63101"
         )
-        
-        property_address = format_clean_address(selected_address) if selected_address else ""
-        if not property_address:
-            property_address = st.text_input("Or enter address manually", value="", placeholder="123 Main St, St. Louis, MO 63101")
+        ss.raw_address_input = property_address
+
+        # 2. ISOLATED BUTTON FOR ON-DEMAND GEOCODING ONLY
+        if st.button("📍 Lock GPS & Verify Coordinates", type="primary", use_container_width=True):
+            if property_address and len(property_address.strip()) > 3:
+                with st.spinner("Geocoding address & locking roof pin..."):
+                    lat, lon, matched_name = geocode_address_on_demand(property_address)
+                    ss.geocoded_data = {
+                        "lat": lat,
+                        "lon": lon,
+                        "matched_address": matched_name
+                    }
+                    st.success("✅ Roof Pin Coordinates Locked!")
+            else:
+                st.warning("Please enter a valid property address first.")
 
         customer_name = st.text_input("Customer / Claim Name", placeholder="e.g. Smith Residence")
         
-        # DATE OF LOSS CALENDAR PICKER
         dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
         dol = dol_val.strftime("%Y-%m-%d")
         
@@ -968,14 +894,11 @@ def main():
         st.divider()
         st.caption("🔒 **Internal Tool:** Photos compress automatically to optimize layout rendering.")
 
-    # ========== MAIN NAVIGATION TABS ==========
+    # MAIN NAVIGATION TABS
     tab_report, tab_claims = st.tabs(["📋 Storm Inspection Report", "📞 Call in Claims"])
 
-    # ============================================================================
     # TAB 1: STORM INSPECTION REPORT & PDF GENERATOR
-    # ============================================================================
     with tab_report:
-        # ========== PHOTO UPLOAD SECTIONS ==========
         st.markdown('<div class="section-header">📷 Field Photo Documentation</div>', unsafe_allow_html=True)
        
         total_photos = 0
@@ -992,8 +915,8 @@ def main():
                 if uploaded_files:
                     processed = process_uploaded_photos(uploaded_files)
                     ss.photo_data[category_name] = processed
-                   
                     total_photos += len(processed)
+                    
                     col1, col2 = st.columns([2, 1])
                     with col1:
                         st.success(f"✅ {len(processed)} photos attached")
@@ -1008,7 +931,6 @@ def main():
                 if not uploaded_files and ss.photo_data[category_name]:
                     ss.photo_data[category_name] = []
        
-        # ========== NOAA DATA & GPS VERIFICATION ==========
         st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
        
         col1, col2 = st.columns([2, 1])
@@ -1018,9 +940,17 @@ def main():
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
        
         if fetch_noaa:
-            noaa_data = fetch_noaa_data(property_address or "Unknown", dol or "Unknown")
+            # Uses locked geocoded coordinates if available, otherwise fallback default
+            if ss.geocoded_data:
+                lat = ss.geocoded_data['lat']
+                lon = ss.geocoded_data['lon']
+                matched_addr = ss.geocoded_data['matched_address']
+            else:
+                lat, lon, matched_addr = 38.6270, -90.1994, "St. Louis, MO (Default - Click 'Lock GPS' in Sidebar)"
+
+            noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown")
            
-            # GPS Coordinate Verification Card
+            # GPS Verification Card
             st.markdown(
                 f"""
                 <div class="gps-verification-box">
@@ -1046,7 +976,6 @@ def main():
        
         st.divider()
        
-        # ========== GENERATE PDF BUTTON ==========
         if st.button("📄 Build Adjuster Package (PDF)", type="primary", use_container_width=True):
             if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, dol]):
                 st.error("❌ Please complete required property and inspector details in the sidebar.")
@@ -1089,15 +1018,12 @@ def main():
                         st.error(f"❌ PDF Compilation Error: {str(e)}")
                         st.exception(e)
 
-    # ============================================================================
     # TAB 2: CALL IN CLAIMS DASHBOARD
-    # ============================================================================
     with tab_claims:
         st.markdown('<div class="section-header">📞 Direct Claims Filing Hotlines</div>', unsafe_allow_html=True)
         st.caption("Tap any carrier button below to directly launch your phone dialer for First Notice of Loss (FNOL).")
         st.write("")
 
-        # Render 2-Column Grid matching the mockup style with Gold/Navy branding
         col_left, col_right = st.columns(2)
 
         for idx, (carrier, phone_num) in enumerate(CARRIER_HOTLINES):
@@ -1110,11 +1036,8 @@ def main():
                 with col_right:
                     st.markdown(btn_html, unsafe_allow_html=True)
 
-    # ========== FOOTER ==========
     st.divider()
-    st.caption(
-        "© Belmont Construction | Field Representative Claim System | Confidential & Proprietary"
-    )
+    st.caption("© Belmont Construction | Field Representative Claim System | Confidential & Proprietary")
 
 
 if __name__ == "__main__":
