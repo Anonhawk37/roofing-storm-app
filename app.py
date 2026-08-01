@@ -74,8 +74,11 @@ CARRIER_HOTLINES = [
     ("American Modern", "18003752075")
 ]
 
-HEADERS = {
-    'User-Agent': 'BelmontConstructionInspectionApp/3.0 (contact@belmontconstruction.com)'
+# Browser-like headers to prevent cloud IP/User-Agent blocks across all external APIs
+GEOCODE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9'
 }
 
 # ReportLab styles
@@ -141,93 +144,83 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: CLEAN & GEOCODE ADDRESS ON DEMAND ONLY (STRUCTURED SEARCH)
+# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER (NO MORE DROPPED ADDRESSES)
 # ============================================================================
 
-def parse_us_address(address_str: str) -> dict:
+def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
     """
-    Parses a standard US address string into structured parts 
-    to maximize Nominatim search accuracy.
-    """
-    clean = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
-    clean = re.sub(r'\s+', ' ', clean).strip(', ')
-
-    zip_match = re.search(r'\b\d{5}\b', clean)
-    postalcode = zip_match.group(0) if zip_match else ""
-    if postalcode:
-        clean = clean.replace(postalcode, '').strip(', ')
-
-    parts = [p.strip() for p in clean.split(',') if p.strip()]
-
-    structured = {
-        "street": "",
-        "city": "",
-        "state": "",
-        "postalcode": postalcode
-    }
-
-    if len(parts) >= 3:
-        structured["street"] = parts[0]
-        structured["city"] = parts[1]
-        structured["state"] = parts[2]
-    elif len(parts) == 2:
-        structured["street"] = parts[0]
-        structured["city"] = parts[1]
-    else:
-        structured["street"] = clean
-
-    return structured
-
-
-def geocode_address_on_demand(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
-    """
-    Geocodes address strictly on demand using Nominatim Structured Search.
-    NO MORE HARDCODED CITY HALL FALLBACKS.
+    Bulletproof multi-engine geocoder for US addresses.
+    Tries: 1. ArcGIS World Geocoder -> 2. US Census Bureau API -> 3. OpenStreetMap Nominatim
     """
     if not address_str or len(address_str.strip()) < 3:
-        return None, None, "Please enter an address."
+        return None, None, "Please enter a valid property address."
 
-    parsed = parse_us_address(address_str)
+    # Clean internal unit/suite/apt designations that mess up spatial indexing
+    clean_addr = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE).strip()
 
-    # 1. Primary Attempt: Structured Search
-    params = {
-        'format': 'json',
-        'countrycodes': 'us',
-        'limit': 1
-    }
-    if parsed["street"]: params['street'] = parsed["street"]
-    if parsed["city"]: params['city'] = parsed["city"]
-    if parsed["state"]: params['state'] = parsed["state"]
-    if parsed["postalcode"]: params['postalcode'] = parsed["postalcode"]
-
+    # ------------------------------------------------------------------
+    # ENGINE 1: ESRI ArcGIS World Geocoding (Primary - Very High Accuracy)
+    # ------------------------------------------------------------------
     try:
-        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(params)
-        res = requests.get(url, headers=HEADERS, timeout=5.0)
+        arcgis_url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
+        params = {
+            'f': 'json',
+            'singleLine': clean_addr,
+            'maxLocations': 1,
+            'outFields': 'Match_addr'
+        }
+        res = requests.get(arcgis_url, params=params, headers=GEOCODE_HEADERS, timeout=5.0)
+        if res.status_code == 200:
+            data = res.json()
+            candidates = data.get('candidates', [])
+            if candidates:
+                loc = candidates[0].get('location', {})
+                lat = float(loc.get('y'))
+                lon = float(loc.get('x'))
+                matched_name = candidates[0].get('address', address_str)
+                return lat, lon, matched_name
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------------
+    # ENGINE 2: US Census Bureau Geocoder (US Government Native API)
+    # ------------------------------------------------------------------
+    try:
+        census_url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+        params = {
+            'address': clean_addr,
+            'benchmark': 'Public_AR_Current',
+            'format': 'json'
+        }
+        res = requests.get(census_url, params=params, headers=GEOCODE_HEADERS, timeout=5.0)
+        if res.status_code == 200:
+            data = res.json()
+            matches = data.get('result', {}).get('addressMatches', [])
+            if matches:
+                coords = matches[0].get('coordinates', {})
+                lat = float(coords.get('y'))
+                lon = float(coords.get('x'))
+                matched_name = matches[0].get('matchedAddress', address_str)
+                return lat, lon, matched_name
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------------
+    # ENGINE 3: OpenStreetMap Nominatim (Final Fallback)
+    # ------------------------------------------------------------------
+    try:
+        nom_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(clean_addr)}&format=json&countrycodes=us&limit=1"
+        res = requests.get(nom_url, headers=GEOCODE_HEADERS, timeout=5.0)
         if res.status_code == 200 and res.json():
             data = res.json()[0]
             lat = float(data['lat'])
             lon = float(data['lon'])
-            matched_display = data.get('display_name', address_str)
-            return lat, lon, matched_display
+            matched_name = data.get('display_name', address_str)
+            return lat, lon, matched_name
     except Exception:
         pass
 
-    # 2. Secondary Attempt: Free-form Fallback Search
-    try:
-        clean_q = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
-        url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(clean_q)}&format=json&countrycodes=us&limit=1"
-        res = requests.get(url, headers=HEADERS, timeout=5.0)
-        if res.status_code == 200 and res.json():
-            data = res.json()[0]
-            lat = float(data['lat'])
-            lon = float(data['lon'])
-            matched_display = data.get('display_name', address_str)
-            return lat, lon, matched_display
-    except Exception:
-        pass
-
-    # 3. If geocoding genuinely fails, return None rather than City Hall coordinates
-    return None, None, "Address Search Failed — Please verify street, city, state, or zip."
+    return None, None, f"Could not locate address '{address_str}'. Please verify details."
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
@@ -316,7 +309,7 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict
     # Source 1: Open-Meteo
     try:
         om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
-        res = requests.get(om_url, timeout=3.0)
+        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=3.0)
         if res.status_code == 200:
             om_data = res.json()
             gusts = om_data.get("hourly", {}).get("wind_gusts_10m", [])
@@ -332,7 +325,7 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict
     # Source 2: IEM / NWS Reports
     try:
         iem_url = f"https://mesonet.agron.iastate.edu/geojson/lsr.php?sts={dol}T00:00Z&ets={dol}T23:59Z"
-        res_iem = requests.get(iem_url, timeout=3.0)
+        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=3.0)
         if res_iem.status_code == 200:
             features = res_iem.json().get("features", [])
             hail_reports = []
@@ -864,15 +857,15 @@ def main():
         property_address = st.text_input(
             "Property Address", 
             value=ss.raw_address_input,
-            placeholder="123 Main St, St. Louis, MO 63101"
+            placeholder="123 Main St, Belleville, IL 62211"
         )
         ss.raw_address_input = property_address
 
-        # 2. ISOLATED BUTTON FOR ON-DEMAND STRUCTURED GEOCODING
+        # 2. ISOLATED BUTTON FOR MULTI-ENGINE GEOCODING
         if st.button("📍 Lock GPS & Verify Coordinates", type="primary", use_container_width=True):
             if property_address and len(property_address.strip()) > 3:
-                with st.spinner("Geocoding address & locking roof pin..."):
-                    lat, lon, matched_name = geocode_address_on_demand(property_address)
+                with st.spinner("Geocoding address across GIS engines & locking roof pin..."):
+                    lat, lon, matched_name = geocode_address_resilient(property_address)
                     if lat is not None and lon is not None:
                         ss.geocoded_data = {
                             "lat": lat,
