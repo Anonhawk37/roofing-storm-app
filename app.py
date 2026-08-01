@@ -7,6 +7,7 @@ Generates professional adjuster-grade PDF reports with photo inspection grids & 
 import os
 import hashlib
 import base64
+import math
 import re
 import urllib.parse
 import streamlit as st
@@ -144,7 +145,7 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER (NO MORE DROPPED ADDRESSES/ZIPS)
+# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER
 # ============================================================================
 
 def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
@@ -289,20 +290,36 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# UTILITY: WEATHER DATA ENGINE & DYNAMIC NARRATIVE
+# UTILITY: DISTANCE & WEATHER DATA ENGINE (IEM RADIUS + OPEN-METEO)
 # ============================================================================
 
-def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict:
+def get_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance in miles between two lat/lon coordinates."""
+    R = 3958.8  # Earth's radius in miles
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_radius_miles: float = 35.0) -> Dict:
     """
     Multi-source weather engine:
-    1. Open-Meteo Historical Archive (Wind & Precipitation)
-    2. IEM / NWS Local Storm Reports (LSR) Spotter Database (Hail & Severe Weather)
+    1. Open-Meteo Historical Archive (Wind Gusts & Precipitation)
+    2. IEM / NWS Local Storm Reports (LSR) Radius Search (Hail Reports within 35 miles)
     """
     max_wind_mph = 0.0
     max_hail_in = 0.0
+    closest_report_info = ""
     citation_notes = []
 
-    # 1. Fetch Surface Wind Speed & Precipitation from Open-Meteo Archive
+    # 1. Fetch Surface Wind Speed from Open-Meteo Archive
     try:
         om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
         res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=5.0)
@@ -316,29 +333,74 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict
     except Exception:
         pass
 
-    # 2. Fetch Verified Hail Reports from IEM / NWS LSR Service
+    # 2. Fetch Radius Hail Reports from IEM GIS LSR Service
     try:
-        # Pull 24-hr window around date of loss
-        iem_url = f"https://mesonet.agron.iastate.edu/geojson/lsr.php?sts={dol}T00:00Z&ets={dol}T23:59Z"
-        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=5.0)
-        if res_iem.status_code == 200:
-            features = res_iem.json().get("features", [])
-            hail_reports = []
-            for feat in features:
-                props = feat.get("properties", {})
-                typetext = str(props.get("TYPETEXT", "")).upper()
-                if "HAIL" in typetext:
-                    val = props.get("MAG", 0)
-                    if val and float(val) > 0:
-                        hail_reports.append(float(val))
-            if hail_reports:
-                max_hail_in = round(max(hail_reports), 2)
-                citation_notes.append(f"IEM NWS Spotter Network recorded peak local hail diameter of {max_hail_in}\".")
+        year, month, day = dol.split('-')
+        iem_url = "https://mesonet.agron.iastate.edu/cgi-bin/request/gis/lsr.py"
+        params = {
+            'wfo': 'ALL',
+            'type': 'HAIL',
+            'year1': year,
+            'month1': month,
+            'day1': day,
+            'hour1': '00',
+            'minute1': '00',
+            'year2': year,
+            'month2': month,
+            'day2': day,
+            'hour2': '23',
+            'minute2': '59',
+            'fmt': 'csv',
+        }
+        res_iem = requests.get(iem_url, params=params, headers=GEOCODE_HEADERS, timeout=8.0)
+        if res_iem.status_code == 200 and res_iem.text:
+            lines = res_iem.text.strip().split('\n')
+            if len(lines) > 1:
+                header = [col.strip().upper() for col in lines[0].split(',')]
+                try:
+                    mag_idx = header.index('MAG')
+                    lat_idx = header.index('LAT')
+                    lon_idx = header.index('LON')
+                    city_idx = header.index('CITY')
+                    
+                    nearby_reports = []
+                    for line in lines[1:]:
+                        parts = line.split(',')
+                        if len(parts) > max(mag_idx, lat_idx, lon_idx):
+                            try:
+                                hail_sz = float(parts[mag_idx])
+                                r_lat = float(parts[lat_idx])
+                                r_lon = float(parts[lon_idx])
+                                city_name = parts[city_idx].strip()
+
+                                dist = get_haversine_distance(lat, lon, r_lat, r_lon)
+                                if dist <= max_radius_miles:
+                                    nearby_reports.append({
+                                        'size': hail_sz,
+                                        'distance': dist,
+                                        'city': city_name
+                                    })
+                            except (ValueError, TypeError):
+                                continue
+
+                    if nearby_reports:
+                        max_hail_in = round(max(r['size'] for r in nearby_reports), 2)
+                        closest = min(nearby_reports, key=lambda x: x['distance'])
+                        closest_report_info = f"({max_hail_in}\" recorded ~{closest['distance']:.1f} mi away near {closest['city']})"
+                        citation_notes.append(
+                            f"IEM NWS Spotter Archive verified {len(nearby_reports)} hail event(s) within {max_radius_miles} miles. Peak diameter: {max_hail_in}\"."
+                        )
+                except ValueError:
+                    pass
     except Exception:
         pass
 
     # Formatted display labels
-    hail_display = f"{max_hail_in}\"" if max_hail_in > 0 else "No Severe Hail Logged"
+    if max_hail_in > 0:
+        hail_display = f"{max_hail_in}\" {closest_report_info}".strip()
+    else:
+        hail_display = "No Severe Hail Logged"
+        
     wind_display = f"{max_wind_mph} mph" if max_wind_mph > 0 else "N/A"
 
     # Dynamic Radar Reflectivity Classification
@@ -387,7 +449,7 @@ def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_da
     weather_clause = (
         f"Historical meteorological archives for <b>{property_address}</b> on loss date <b>{dol}</b> "
         f"log peak recorded surface gusts of <b>{noaa_data.get('wind_gust_speed_mph', 'N/A')}</b> "
-        f"and verified local hail activity of <b>{noaa_data.get('peak_hail_size_inches', 'N/A')}</b>."
+        f"and verified regional hail activity of <b>{noaa_data.get('peak_hail_size_inches', 'N/A')}</b>."
     )
 
     return f"<b>Field Observation:</b> {obs_clause}<br/><br/><b>Meteorological Context:</b> {weather_clause}"
@@ -959,7 +1021,7 @@ def main():
                 lon = ss.geocoded_data['lon']
                 matched_addr = ss.geocoded_data['matched_address']
 
-                noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown")
+                noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown", max_radius_miles=35.0)
                
                 # GPS Verification Card
                 st.markdown(
