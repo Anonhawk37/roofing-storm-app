@@ -13,7 +13,7 @@ import streamlit as st
 from streamlit import session_state as ss
 from PIL import Image, ImageOps
 import io
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Tuple, Optional
 import json
 import requests
@@ -144,16 +144,16 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER (NO MORE DROPPED ADDRESSES)
+# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER (NO MORE DROPPED ADDRESSES/ZIPS)
 # ============================================================================
 
 def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
     """
-    Bulletproof multi-engine geocoder for US addresses.
+    Multi-engine geocoder supporting standard addresses, city/state, or 5-digit zip codes.
     Tries: 1. ArcGIS World Geocoder -> 2. US Census Bureau API -> 3. OpenStreetMap Nominatim
     """
     if not address_str or len(address_str.strip()) < 3:
-        return None, None, "Please enter a valid property address."
+        return None, None, "Please enter a valid property address or zip code."
 
     clean_addr = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE).strip()
 
@@ -213,7 +213,7 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     except Exception:
         pass
 
-    return None, None, f"Could not locate address '{address_str}'. Please verify details."
+    return None, None, f"Could not locate '{address_str}'. Please verify details."
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
@@ -294,44 +294,46 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
 
 def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict:
     """
-    Queries Open-Meteo Historical Archive and IEM NWS Spotter Network.
-    Zeros out baselines if no severe weather was logged to prevent false claims.
+    Multi-source weather engine:
+    1. Open-Meteo Historical Archive (Wind & Precipitation)
+    2. IEM / NWS Local Storm Reports (LSR) Spotter Database (Hail & Severe Weather)
     """
     max_wind_mph = 0.0
     max_hail_in = 0.0
     citation_notes = []
 
-    # 1. Fetch Real Wind Speed from Open-Meteo Archive
+    # 1. Fetch Surface Wind Speed & Precipitation from Open-Meteo Archive
     try:
         om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
-        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=4.0)
+        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=5.0)
         if res.status_code == 200:
             om_data = res.json()
             gusts = om_data.get("hourly", {}).get("wind_gusts_10m", [])
             valid_gusts = [g for g in gusts if g is not None]
             if valid_gusts:
                 max_wind_mph = round(max(valid_gusts), 1)
-                citation_notes.append(f"Open-Meteo Historical API recorded peak surface gusts of {max_wind_mph} mph.")
+                citation_notes.append(f"Open-Meteo API logged max surface wind gusts of {max_wind_mph} mph.")
     except Exception:
         pass
 
-    # 2. Fetch Verified Hail Spotter Logs from IEM / NWS
+    # 2. Fetch Verified Hail Reports from IEM / NWS LSR Service
     try:
+        # Pull 24-hr window around date of loss
         iem_url = f"https://mesonet.agron.iastate.edu/geojson/lsr.php?sts={dol}T00:00Z&ets={dol}T23:59Z"
-        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=4.0)
+        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=5.0)
         if res_iem.status_code == 200:
             features = res_iem.json().get("features", [])
             hail_reports = []
             for feat in features:
                 props = feat.get("properties", {})
-                typetext = props.get("TYPETEXT", "").upper()
+                typetext = str(props.get("TYPETEXT", "")).upper()
                 if "HAIL" in typetext:
                     val = props.get("MAG", 0)
-                    if val and val > 0:
+                    if val and float(val) > 0:
                         hail_reports.append(float(val))
             if hail_reports:
                 max_hail_in = round(max(hail_reports), 2)
-                citation_notes.append(f"IEM NWS Spotter Network logged maximum hail diameter of {max_hail_in}\".")
+                citation_notes.append(f"IEM NWS Spotter Network recorded peak local hail diameter of {max_hail_in}\".")
     except Exception:
         pass
 
@@ -339,9 +341,9 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict
     hail_display = f"{max_hail_in}\"" if max_hail_in > 0 else "No Severe Hail Logged"
     wind_display = f"{max_wind_mph} mph" if max_wind_mph > 0 else "N/A"
 
-    # Dynamic Reflectivity Classification
+    # Dynamic Radar Reflectivity Classification
     if max_hail_in >= 1.75:
-        dbz_display = "60+ dBZ (Severe Core)"
+        dbz_display = "60+ dBZ (Severe Hail Core)"
     elif max_hail_in >= 1.0:
         dbz_display = "50-55 dBZ (Hail Core)"
     elif max_wind_mph >= 50:
@@ -847,18 +849,18 @@ def main():
         st.divider()
         st.markdown("### 📍 Property Details")
         
-        # 1. SIMPLE TEXT INPUT FOR ADDRESS
+        # 1. TEXT INPUT FOR ADDRESS OR ZIP CODE
         property_address = st.text_input(
-            "Property Address", 
+            "Property Address or Zip Code", 
             value=ss.raw_address_input,
-            placeholder="123 Main St, Belleville, IL 62211"
+            placeholder="e.g. 123 Main St, Belleville IL or 62221"
         )
         ss.raw_address_input = property_address
 
         # 2. ISOLATED BUTTON FOR MULTI-ENGINE GEOCODING
         if st.button("📍 Lock GPS & Verify Coordinates", type="primary", use_container_width=True):
-            if property_address and len(property_address.strip()) > 3:
-                with st.spinner("Geocoding address across GIS engines & locking roof pin..."):
+            if property_address and len(property_address.strip()) >= 3:
+                with st.spinner("Geocoding across GIS engines & locking coordinates..."):
                     lat, lon, matched_name = geocode_address_resilient(property_address)
                     if lat is not None and lon is not None:
                         ss.geocoded_data = {
@@ -866,12 +868,12 @@ def main():
                             "lon": lon,
                             "matched_address": matched_name
                         }
-                        st.success("✅ Roof Pin Coordinates Locked!")
+                        st.success("✅ Target Coordinates Locked!")
                     else:
                         ss.geocoded_data = None
-                        st.error("❌ Address match failed. Check street, city, state, or zip.")
+                        st.error("❌ Location match failed. Check street, city, state, or zip code.")
             else:
-                st.warning("Please enter a valid property address first.")
+                st.warning("Please enter a valid property address or zip code first.")
 
         customer_name = st.text_input("Customer / Claim Name", placeholder="e.g. Smith Residence")
         
@@ -964,9 +966,9 @@ def main():
                     f"""
                     <div class="gps-verification-box">
                         <h4>📍 Property GPS & Roof Pin Verification</h4>
-                        <p><b>Target Address:</b> {property_address or 'Not Entered'}</p>
+                        <p><b>Target Location:</b> {property_address or 'Not Entered'}</p>
                         <p><b>Geocoded Match:</b> {noaa_data['matched_address']}</p>
-                        <p><b>Raw Coordinates:</b> {noaa_data['lat']}, {noaa_data['lon']}</p>
+                        <p><b>Coordinates:</b> {noaa_data['lat']}, {noaa_data['lon']}</p>
                         <a href="{noaa_data['maps_url']}" target="_blank" class="maps-link-btn">📍 Verify Roof Pin on Google Maps</a>
                     </div>
                     """,
@@ -995,7 +997,7 @@ def main():
 
             else:
                 noaa_data = None
-                st.warning("⚠️ **GPS Coordinates Not Locked:** Please type the address in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch weather radar metrics.")
+                st.warning("⚠️ **GPS Coordinates Not Locked:** Please enter an address/zip in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch weather radar metrics.")
         else:
             noaa_data = None
        
