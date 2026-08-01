@@ -188,8 +188,8 @@ def search_address(search_term: str) -> List[str]:
     
     try:
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={search_term}&addressdetails=1&limit=5&countrycodes=us"
-        headers = {'User-Agent': 'BelmontInspectionApp/1.0'}
-        response = requests.get(url, headers=headers, timeout=2.5)
+        headers = {'User-Agent': 'BelmontConstructionInspectionApp/2.0 (contact@belmontconstruction.com)'}
+        response = requests.get(url, headers=headers, timeout=5.0)
         
         if response.status_code == 200:
             data = response.json()
@@ -206,20 +206,45 @@ def search_address(search_term: str) -> List[str]:
 
 
 def geocode_address(address_str: str) -> Tuple[float, float, str]:
-    """Converts property address to (latitude, longitude, matched_display_name)."""
-    if not address_str:
+    """
+    Converts property address to (latitude, longitude, matched_display_name).
+    Includes fallbacks to prevent locking onto St. Louis City Hall.
+    """
+    if not address_str or len(address_str.strip()) < 3:
         return 38.6270, -90.1994, "St. Louis, MO (Default)"
+    
+    headers = {
+        'User-Agent': 'BelmontConstructionInspectionApp/2.0 (contact@belmontconstruction.com)'
+    }
+    
+    # Attempt 1: Direct query with the provided address
     try:
-        url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address_str)}&limit=1"
-        headers = {'User-Agent': 'BelmontInspectionApp/1.0'}
-        res = requests.get(url, headers=headers, timeout=2.5)
+        url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address_str)}&limit=1&countrycodes=us"
+        res = requests.get(url, headers=headers, timeout=5.0)
+        
         if res.status_code == 200 and res.json():
             data = res.json()[0]
             clean_matched = format_clean_address(data.get('display_name', ''))
             return float(data['lat']), float(data['lon']), clean_matched
     except Exception:
         pass
-    return 38.6270, -90.1994, "St. Louis, MO (Default)"
+
+    # Attempt 2: Fallback query if formatting was too strict
+    try:
+        # Simplifies address by taking first and last components if available
+        parts = [p.strip() for p in address_str.split(',') if p.strip()]
+        if len(parts) > 2:
+            simplified = f"{parts[0]}, {parts[-1]}"
+            url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(simplified)}&limit=1&countrycodes=us"
+            res = requests.get(url, headers=headers, timeout=5.0)
+            if res.status_code == 200 and res.json():
+                data = res.json()[0]
+                clean_matched = format_clean_address(data.get('display_name', ''))
+                return float(data['lat']), float(data['lon']), clean_matched
+    except Exception:
+        pass
+
+    return 38.6270, -90.1994, "St. Louis, MO (Fallback Default)"
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
