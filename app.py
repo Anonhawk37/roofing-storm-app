@@ -52,6 +52,27 @@ PHOTO_CATEGORIES = {
     },
 }
 
+CARRIER_HOTLINES = [
+    ("State Farm", "18007325246"),
+    ("Progressive", "18007764737"),
+    ("Allstate", "18002557828"),
+    ("Liberty Mutual", "18002252467"),
+    ("Travelers", "18002524633"),
+    ("USAA", "18005318722"),
+    ("Chubb", "18002524670"),
+    ("Nationwide", "18004213535"),
+    ("Farmers", "18004357764"),
+    ("American Family", "18006926326"),
+    ("Hartford", "18002435860"),
+    ("Auto Owners", "18882524626"),
+    ("Cincinnati", "18772422544"),
+    ("Country Financial", "18662686879"),
+    ("Shelter", "18007435837"),
+    ("PURE", "18888137873"),
+    ("Farm Bureau", "18002266383"),
+    ("American Modern", "18003752075")
+]
+
 # ReportLab styles
 STYLES = getSampleStyleSheet()
 TITLE_STYLE = ParagraphStyle(
@@ -130,7 +151,6 @@ def format_clean_address(raw_address: str) -> str:
     
     parts = [p.strip() for p in raw_address.split(",") if p.strip()]
     
-    # Fix '123, Main St' issue where house number is separated from street name by comma
     if len(parts) > 1 and parts[0].isdigit():
         parts[0] = f"{parts[0]} {parts[1]}"
         parts.pop(1)
@@ -185,20 +205,21 @@ def search_address(search_term: str) -> List[str]:
     return []
 
 
-def geocode_address(address_str: str) -> Tuple[float, float]:
-    """Converts property address to (latitude, longitude) coordinates."""
+def geocode_address(address_str: str) -> Tuple[float, float, str]:
+    """Converts property address to (latitude, longitude, matched_display_name)."""
     if not address_str:
-        return 38.6270, -90.1994  # Default St. Louis coordinates
+        return 38.6270, -90.1994, "St. Louis, MO (Default)"
     try:
         url = f"https://nominatim.openstreetmap.org/search?format=json&q={requests.utils.quote(address_str)}&limit=1"
         headers = {'User-Agent': 'BelmontInspectionApp/1.0'}
         res = requests.get(url, headers=headers, timeout=2.5)
         if res.status_code == 200 and res.json():
             data = res.json()[0]
-            return float(data['lat']), float(data['lon'])
+            clean_matched = format_clean_address(data.get('display_name', ''))
+            return float(data['lat']), float(data['lon']), clean_matched
     except Exception:
         pass
-    return 38.6270, -90.1994
+    return 38.6270, -90.1994, "St. Louis, MO (Default)"
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
@@ -212,20 +233,15 @@ def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, 
     """
     try:
         img = Image.open(uploaded_file)
-        
-        # Handle EXIF orientation tags
         img = ImageOps.exif_transpose(img)
        
-        # Convert RGBA to RGB if needed
         if img.mode in ('RGBA', 'LA', 'P'):
             rgb_img = Image.new('RGB', img.size, (255, 255, 255))
             rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
             img = rgb_img
        
-        # Calculate aspect ratio and resize
         img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
        
-        # Compress to bytes
         output = io.BytesIO()
         img.save(output, format='JPEG', quality=quality, optimize=True)
         compressed_bytes = output.getvalue()
@@ -303,7 +319,7 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
     Fetches real weather data from multiple open databases (Open-Meteo & Iowa Environmental Mesonet / NWS radar logs),
     cross-references the results, picks maximum recorded storm impact metrics, and builds citations.
     """
-    lat, lon = geocode_address(address)
+    lat, lon, matched_addr = geocode_address(address)
     
     # Defaults
     max_wind_mph = 52.0
@@ -350,7 +366,6 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
     except Exception:
         pass
 
-    # Dynamic DBZ calculation based on peak hail size
     dbz = int(48 + (max_hail_in * 8))
     
     if not citation_notes:
@@ -359,6 +374,10 @@ def fetch_noaa_data(address: str, dol: str) -> Dict:
     storm_time_str = f"{dol} Peak Cell Traversal (CDT)" if dol else "Verified Date of Loss"
 
     return {
+        "lat": lat,
+        "lon": lon,
+        "matched_address": matched_addr,
+        "maps_url": f"https://www.google.com/maps?q={lat},{lon}",
         "peak_hail_size_inches": max_hail_in,
         "radar_reflectivity_dbz": dbz,
         "wind_gust_speed_mph": max_wind_mph,
@@ -771,6 +790,61 @@ def apply_belmont_branding():
             letter-spacing: 0.3px;
         }
 
+        /* GPS Verification Box */
+        .gps-verification-box {
+            background-color: #1E293B;
+            border: 1px solid #D4AF37;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            color: #FFFFFF;
+        }
+        .gps-verification-box h4 {
+            color: #D4AF37;
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 1.05rem;
+        }
+        .gps-verification-box p {
+            margin: 4px 0;
+            font-size: 0.9rem;
+            color: #E2E8F0;
+        }
+        .maps-link-btn {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 6px 14px;
+            background-color: #D4AF37;
+            color: #1E293B !important;
+            font-weight: 700;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.85rem;
+        }
+
+        /* Call in Claims Grid Buttons */
+        .carrier-call-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #1E293B;
+            color: #D4AF37 !important;
+            border: 1.5px solid #D4AF37;
+            border-radius: 25px;
+            padding: 14px 10px;
+            font-size: 1rem;
+            font-weight: 700;
+            text-decoration: none;
+            text-align: center;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: all 0.2s ease;
+        }
+        .carrier-call-btn:hover {
+            background-color: #D4AF37;
+            color: #1E293B !important;
+        }
+
         /* Metric Cards */
         [data-testid="stMetricValue"] {
             color: #D4AF37 !important;
@@ -869,106 +943,148 @@ def main():
         st.divider()
         st.caption("🔒 **Internal Tool:** Photos compress automatically to optimize layout rendering.")
 
-    # ========== MAIN AREA: PHOTO UPLOAD SECTIONS ==========
-    st.markdown('<div class="section-header">📷 Field Photo Documentation</div>', unsafe_allow_html=True)
-   
-    total_photos = 0
-   
-    for category_name, category_info in PHOTO_CATEGORIES.items():
-        with st.expander(f"📁 {category_name} — {category_info['description']}"):
-            uploaded_files = st.file_uploader(
-                f"Upload photos for {category_name}",
-                type=["jpg", "jpeg", "png"],
-                accept_multiple_files=True,
-                key=f"uploader_{category_name}"
-            )
-           
-            if uploaded_files:
-                processed = process_uploaded_photos(uploaded_files)
-                ss.photo_data[category_name] = processed
-               
-                total_photos += len(processed)
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.success(f"✅ {len(processed)} photos attached")
-                with col2:
-                    st.caption(f"Payload: ~{sum(p['file_size_kb'] for p in processed):.0f} KB")
-               
-                preview_cols = st.columns(min(4, len(processed)))
-                for idx, photo in enumerate(processed[:4]):
-                    with preview_cols[idx % len(preview_cols)]:
-                        st.image(photo['compressed_bytes'], width=110)
-           
-            if not uploaded_files and ss.photo_data[category_name]:
-                ss.photo_data[category_name] = []
-   
-    # ========== NOAA DATA & PDF GENERATION ==========
-    st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
-   
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        fetch_noaa = st.checkbox("Include NOAA Radar & Storm Core Verification", value=True)
-    with col2:
-        st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
-   
-    if fetch_noaa:
-        noaa_data = fetch_noaa_data(property_address or "Unknown", dol or "Unknown")
+    # ========== MAIN NAVIGATION TABS ==========
+    tab_report, tab_claims = st.tabs(["📋 Storm Inspection Report", "📞 Call in Claims"])
+
+    # ============================================================================
+    # TAB 1: STORM INSPECTION REPORT & PDF GENERATOR
+    # ============================================================================
+    with tab_report:
+        # ========== PHOTO UPLOAD SECTIONS ==========
+        st.markdown('<div class="section-header">📷 Field Photo Documentation</div>', unsafe_allow_html=True)
        
-        col1, col2, col3 = st.columns(3)
+        total_photos = 0
+       
+        for category_name, category_info in PHOTO_CATEGORIES.items():
+            with st.expander(f"📁 {category_name} — {category_info['description']}"):
+                uploaded_files = st.file_uploader(
+                    f"Upload photos for {category_name}",
+                    type=["jpg", "jpeg", "png"],
+                    accept_multiple_files=True,
+                    key=f"uploader_{category_name}"
+                )
+               
+                if uploaded_files:
+                    processed = process_uploaded_photos(uploaded_files)
+                    ss.photo_data[category_name] = processed
+                   
+                    total_photos += len(processed)
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.success(f"✅ {len(processed)} photos attached")
+                    with col2:
+                        st.caption(f"Payload: ~{sum(p['file_size_kb'] for p in processed):.0f} KB")
+                   
+                    preview_cols = st.columns(min(4, len(processed)))
+                    for idx, photo in enumerate(processed[:4]):
+                        with preview_cols[idx % len(preview_cols)]:
+                            st.image(photo['compressed_bytes'], width=110)
+               
+                if not uploaded_files and ss.photo_data[category_name]:
+                    ss.photo_data[category_name] = []
+       
+        # ========== NOAA DATA & GPS VERIFICATION ==========
+        st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
+       
+        col1, col2 = st.columns([2, 1])
         with col1:
-            st.metric("Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\"")
+            fetch_noaa = st.checkbox("Include NOAA Radar & Storm Core Verification", value=True)
         with col2:
-            st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
-        with col3:
-            st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
-    else:
-        noaa_data = None
-   
-    st.divider()
-   
-    # ========== GENERATE PDF BUTTON ==========
-    if st.button("📄 Build Adjuster Package (PDF)", type="primary", use_container_width=True):
-        if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, dol]):
-            st.error("❌ Please complete required property and inspector details in the sidebar.")
-        elif not noaa_data:
-            st.error("❌ NOAA storm data verification is required.")
-        elif total_photos == 0:
-            st.error("❌ Upload at least one inspection photo before building the PDF.")
+            st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
+       
+        if fetch_noaa:
+            noaa_data = fetch_noaa_data(property_address or "Unknown", dol or "Unknown")
+           
+            # GPS Coordinate Verification Card
+            st.markdown(
+                f"""
+                <div class="gps-verification-box">
+                    <h4>📍 Property GPS & Roof Pin Verification</h4>
+                    <p><b>Target Address:</b> {property_address or 'Not Entered'}</p>
+                    <p><b>Geocoded Match:</b> {noaa_data['matched_address']}</p>
+                    <p><b>Raw Coordinates:</b> {noaa_data['lat']}, {noaa_data['lon']}</p>
+                    <a href="{noaa_data['maps_url']}" target="_blank" class="maps-link-btn">📍 Verify Roof Pin on Google Maps</a>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\"")
+            with col2:
+                st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
+            with col3:
+                st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
         else:
-            with st.spinner("Compiling high-resolution report and grid layouts..."):
-                try:
-                    photo_data_filtered = {k: v for k, v in ss.photo_data.items() if v}
-                   
-                    pdf_bytes = generate_adjuster_pdf(
-                        inspector_name=inspector_name,
-                        inspector_phone=inspector_phone,
-                        inspector_email=inspector_email,
-                        property_address=property_address,
-                        customer_name=customer_name,
-                        dol=dol,
-                        inspection_date=inspection_date_val.strftime("%Y-%m-%d"),
-                        report_type=report_type,
-                        local_office=local_office,
-                        noaa_data=noaa_data,
-                        photo_categories_data=photo_data_filtered
-                    )
-                   
-                    file_size_mb = len(pdf_bytes) / (1024 * 1024)
-                   
-                    st.download_button(
-                        label=f"📥 Download Belmont Adjuster PDF ({file_size_mb:.1f} MB)",
-                        data=pdf_bytes,
-                        file_name=f"Belmont_Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                   
-                    st.success(f"✅ Package ready! Size: {file_size_mb:.1f} MB across {total_photos} photos.")
-                   
-                except Exception as e:
-                    st.error(f"❌ PDF Compilation Error: {str(e)}")
-                    st.exception(e)
-   
+            noaa_data = None
+       
+        st.divider()
+       
+        # ========== GENERATE PDF BUTTON ==========
+        if st.button("📄 Build Adjuster Package (PDF)", type="primary", use_container_width=True):
+            if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, dol]):
+                st.error("❌ Please complete required property and inspector details in the sidebar.")
+            elif not noaa_data:
+                st.error("❌ NOAA storm data verification is required.")
+            elif total_photos == 0:
+                st.error("❌ Upload at least one inspection photo before building the PDF.")
+            else:
+                with st.spinner("Compiling high-resolution report and grid layouts..."):
+                    try:
+                        photo_data_filtered = {k: v for k, v in ss.photo_data.items() if v}
+                       
+                        pdf_bytes = generate_adjuster_pdf(
+                            inspector_name=inspector_name,
+                            inspector_phone=inspector_phone,
+                            inspector_email=inspector_email,
+                            property_address=property_address,
+                            customer_name=customer_name,
+                            dol=dol,
+                            inspection_date=inspection_date_val.strftime("%Y-%m-%d"),
+                            report_type=report_type,
+                            local_office=local_office,
+                            noaa_data=noaa_data,
+                            photo_categories_data=photo_data_filtered
+                        )
+                       
+                        file_size_mb = len(pdf_bytes) / (1024 * 1024)
+                       
+                        st.download_button(
+                            label=f"📥 Download Belmont Adjuster PDF ({file_size_mb:.1f} MB)",
+                            data=pdf_bytes,
+                            file_name=f"Belmont_Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                       
+                        st.success(f"✅ Package ready! Size: {file_size_mb:.1f} MB across {total_photos} photos.")
+                       
+                    except Exception as e:
+                        st.error(f"❌ PDF Compilation Error: {str(e)}")
+                        st.exception(e)
+
+    # ============================================================================
+    # TAB 2: CALL IN CLAIMS DASHBOARD
+    # ============================================================================
+    with tab_claims:
+        st.markdown('<div class="section-header">📞 Direct Claims Filing Hotlines</div>', unsafe_allow_html=True)
+        st.caption("Tap any carrier button below to directly launch your phone dialer for First Notice of Loss (FNOL).")
+        st.write("")
+
+        # Render 2-Column Grid matching the mockup style with Gold/Navy branding
+        col_left, col_right = st.columns(2)
+
+        for idx, (carrier, phone_num) in enumerate(CARRIER_HOTLINES):
+            btn_html = f'<a href="tel:{phone_num}" class="carrier-call-btn">{carrier}</a>'
+            
+            if idx % 2 == 0:
+                with col_left:
+                    st.markdown(btn_html, unsafe_allow_html=True)
+            else:
+                with col_right:
+                    st.markdown(btn_html, unsafe_allow_html=True)
+
     # ========== FOOTER ==========
     st.divider()
     st.caption(
