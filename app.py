@@ -14,7 +14,7 @@ from streamlit import session_state as ss
 from PIL import Image, ImageOps
 import io
 from datetime import datetime, date
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import json
 import requests
 
@@ -141,80 +141,93 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: CLEAN & GEOCODE ADDRESS ON DEMAND ONLY
+# UTILITY: CLEAN & GEOCODE ADDRESS ON DEMAND ONLY (STRUCTURED SEARCH)
 # ============================================================================
 
-def format_clean_address(raw_address: str) -> str:
-    """Cleans raw geocoder strings by removing country/county names."""
-    if not raw_address:
-        return ""
-    
-    parts = [p.strip() for p in raw_address.split(",") if p.strip()]
-    if len(parts) > 1 and parts[0].isdigit():
-        parts[0] = f"{parts[0]} {parts[1]}"
-        parts.pop(1)
-
-    filtered_parts = []
-    zip_code = ""
-    for p in parts:
-        p_lower = p.lower()
-        if p_lower in ["united states", "united states of america", "usa", "us"]:
-            continue
-        if "county" in p_lower:
-            continue
-        if p.isdigit() and len(p) in [5, 9]:
-            zip_code = p
-            continue
-        filtered_parts.append(p)
-        
-    base_address = ", ".join(filtered_parts)
-    if zip_code and not base_address.endswith(zip_code):
-        return f"{base_address} {zip_code}"
-    return base_address
-
-
-def clean_address_for_nominatim(address_str: str) -> str:
-    """Removes suite/apt/unit numbers that cause Nominatim match failures."""
-    cleaned = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip(', ')
-    return cleaned
-
-
-def geocode_address_on_demand(address_str: str) -> Tuple[float, float, str]:
+def parse_us_address(address_str: str) -> dict:
     """
-    Geocodes address ONLY when called on button click.
+    Parses a standard US address string into structured parts 
+    to maximize Nominatim search accuracy.
+    """
+    clean = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
+    clean = re.sub(r'\s+', ' ', clean).strip(', ')
+
+    zip_match = re.search(r'\b\d{5}\b', clean)
+    postalcode = zip_match.group(0) if zip_match else ""
+    if postalcode:
+        clean = clean.replace(postalcode, '').strip(', ')
+
+    parts = [p.strip() for p in clean.split(',') if p.strip()]
+
+    structured = {
+        "street": "",
+        "city": "",
+        "state": "",
+        "postalcode": postalcode
+    }
+
+    if len(parts) >= 3:
+        structured["street"] = parts[0]
+        structured["city"] = parts[1]
+        structured["state"] = parts[2]
+    elif len(parts) == 2:
+        structured["street"] = parts[0]
+        structured["city"] = parts[1]
+    else:
+        structured["street"] = clean
+
+    return structured
+
+
+def geocode_address_on_demand(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
+    """
+    Geocodes address strictly on demand using Nominatim Structured Search.
+    NO MORE HARDCODED CITY HALL FALLBACKS.
     """
     if not address_str or len(address_str.strip()) < 3:
-        return 38.6270, -90.1994, "St. Louis, MO (Default)"
-    
-    cleaned_addr = clean_address_for_nominatim(address_str)
-    
-    # Attempt 1: Full Query
+        return None, None, "Please enter an address."
+
+    parsed = parse_us_address(address_str)
+
+    # 1. Primary Attempt: Structured Search
+    params = {
+        'format': 'json',
+        'countrycodes': 'us',
+        'limit': 1
+    }
+    if parsed["street"]: params['street'] = parsed["street"]
+    if parsed["city"]: params['city'] = parsed["city"]
+    if parsed["state"]: params['state'] = parsed["state"]
+    if parsed["postalcode"]: params['postalcode'] = parsed["postalcode"]
+
     try:
-        url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(cleaned_addr)}&format=json&countrycodes=us&limit=1"
+        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(params)
         res = requests.get(url, headers=HEADERS, timeout=5.0)
         if res.status_code == 200 and res.json():
             data = res.json()[0]
-            clean_matched = format_clean_address(data.get('display_name', ''))
-            return float(data['lat']), float(data['lon']), clean_matched
+            lat = float(data['lat'])
+            lon = float(data['lon'])
+            matched_display = data.get('display_name', address_str)
+            return lat, lon, matched_display
     except Exception:
         pass
 
-    # Attempt 2: Simplified Fallback Query
+    # 2. Secondary Attempt: Free-form Fallback Search
     try:
-        parts = [p.strip() for p in cleaned_addr.split(',') if p.strip()]
-        if len(parts) > 2:
-            simplified = f"{parts[0]}, {parts[-1]}"
-            url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(simplified)}&format=json&countrycodes=us&limit=1"
-            res = requests.get(url, headers=HEADERS, timeout=5.0)
-            if res.status_code == 200 and res.json():
-                data = res.json()[0]
-                clean_matched = format_clean_address(data.get('display_name', ''))
-                return float(data['lat']), float(data['lon']), clean_matched
+        clean_q = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE)
+        url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(clean_q)}&format=json&countrycodes=us&limit=1"
+        res = requests.get(url, headers=HEADERS, timeout=5.0)
+        if res.status_code == 200 and res.json():
+            data = res.json()[0]
+            lat = float(data['lat'])
+            lon = float(data['lon'])
+            matched_display = data.get('display_name', address_str)
+            return lat, lon, matched_display
     except Exception:
         pass
 
-    return 38.6270, -90.1994, "St. Louis, MO (Fallback Default)"
+    # 3. If geocoding genuinely fails, return None rather than City Hall coordinates
+    return None, None, "Address Search Failed — Please verify street, city, state, or zip."
 
 # ============================================================================
 # UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
@@ -847,7 +860,7 @@ def main():
         st.divider()
         st.markdown("### 📍 Property Details")
         
-        # 1. SIMPLE TEXT INPUT FOR ADDRESS (AUTO-UPDATES TEXT INPUT INSTANTLY)
+        # 1. SIMPLE TEXT INPUT FOR ADDRESS
         property_address = st.text_input(
             "Property Address", 
             value=ss.raw_address_input,
@@ -855,17 +868,21 @@ def main():
         )
         ss.raw_address_input = property_address
 
-        # 2. ISOLATED BUTTON FOR ON-DEMAND GEOCODING ONLY
+        # 2. ISOLATED BUTTON FOR ON-DEMAND STRUCTURED GEOCODING
         if st.button("📍 Lock GPS & Verify Coordinates", type="primary", use_container_width=True):
             if property_address and len(property_address.strip()) > 3:
                 with st.spinner("Geocoding address & locking roof pin..."):
                     lat, lon, matched_name = geocode_address_on_demand(property_address)
-                    ss.geocoded_data = {
-                        "lat": lat,
-                        "lon": lon,
-                        "matched_address": matched_name
-                    }
-                    st.success("✅ Roof Pin Coordinates Locked!")
+                    if lat is not None and lon is not None:
+                        ss.geocoded_data = {
+                            "lat": lat,
+                            "lon": lon,
+                            "matched_address": matched_name
+                        }
+                        st.success("✅ Roof Pin Coordinates Locked!")
+                    else:
+                        ss.geocoded_data = None
+                        st.error("❌ Address match failed. Check street, city, state, or zip.")
             else:
                 st.warning("Please enter a valid property address first.")
 
@@ -940,37 +957,38 @@ def main():
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
        
         if fetch_noaa:
-            # Uses locked geocoded coordinates if available, otherwise fallback default
-            if ss.geocoded_data:
+            # Uses locked geocoded coordinates if available, otherwise prompts user
+            if ss.geocoded_data and ss.geocoded_data.get('lat') is not None:
                 lat = ss.geocoded_data['lat']
                 lon = ss.geocoded_data['lon']
                 matched_addr = ss.geocoded_data['matched_address']
+
+                noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown")
+               
+                # GPS Verification Card
+                st.markdown(
+                    f"""
+                    <div class="gps-verification-box">
+                        <h4>📍 Property GPS & Roof Pin Verification</h4>
+                        <p><b>Target Address:</b> {property_address or 'Not Entered'}</p>
+                        <p><b>Geocoded Match:</b> {noaa_data['matched_address']}</p>
+                        <p><b>Raw Coordinates:</b> {noaa_data['lat']}, {noaa_data['lon']}</p>
+                        <a href="{noaa_data['maps_url']}" target="_blank" class="maps-link-btn">📍 Verify Roof Pin on Google Maps</a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\"")
+                with col2:
+                    st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
+                with col3:
+                    st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
             else:
-                lat, lon, matched_addr = 38.6270, -90.1994, "St. Louis, MO (Default - Click 'Lock GPS' in Sidebar)"
-
-            noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown")
-           
-            # GPS Verification Card
-            st.markdown(
-                f"""
-                <div class="gps-verification-box">
-                    <h4>📍 Property GPS & Roof Pin Verification</h4>
-                    <p><b>Target Address:</b> {property_address or 'Not Entered'}</p>
-                    <p><b>Geocoded Match:</b> {noaa_data['matched_address']}</p>
-                    <p><b>Raw Coordinates:</b> {noaa_data['lat']}, {noaa_data['lon']}</p>
-                    <a href="{noaa_data['maps_url']}" target="_blank" class="maps-link-btn">📍 Verify Roof Pin on Google Maps</a>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\"")
-            with col2:
-                st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
-            with col3:
-                st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
+                noaa_data = None
+                st.warning("⚠️ **GPS Coordinates Not Locked:** Please type the address in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch weather radar metrics.")
         else:
             noaa_data = None
        
@@ -979,8 +997,8 @@ def main():
         if st.button("📄 Build Adjuster Package (PDF)", type="primary", use_container_width=True):
             if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, dol]):
                 st.error("❌ Please complete required property and inspector details in the sidebar.")
-            elif not noaa_data:
-                st.error("❌ NOAA storm data verification is required.")
+            elif fetch_noaa and not noaa_data:
+                st.error("❌ Please click '📍 Lock GPS & Verify Coordinates' in the sidebar before building the PDF.")
             elif total_photos == 0:
                 st.error("❌ Upload at least one inspection photo before building the PDF.")
             else:
@@ -998,7 +1016,7 @@ def main():
                             inspection_date=inspection_date_val.strftime("%Y-%m-%d"),
                             report_type=report_type,
                             local_office=local_office,
-                            noaa_data=noaa_data,
+                            noaa_data=noaa_data or {},
                             photo_categories_data=photo_data_filtered
                         )
                        
