@@ -155,12 +155,9 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     if not address_str or len(address_str.strip()) < 3:
         return None, None, "Please enter a valid property address."
 
-    # Clean internal unit/suite/apt designations that mess up spatial indexing
     clean_addr = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE).strip()
 
-    # ------------------------------------------------------------------
-    # ENGINE 1: ESRI ArcGIS World Geocoding (Primary - Very High Accuracy)
-    # ------------------------------------------------------------------
+    # 1. ESRI ArcGIS World Geocoding
     try:
         arcgis_url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
         params = {
@@ -182,9 +179,7 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     except Exception:
         pass
 
-    # ------------------------------------------------------------------
-    # ENGINE 2: US Census Bureau Geocoder (US Government Native API)
-    # ------------------------------------------------------------------
+    # 2. US Census Bureau Geocoder
     try:
         census_url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
         params = {
@@ -205,9 +200,7 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     except Exception:
         pass
 
-    # ------------------------------------------------------------------
-    # ENGINE 3: OpenStreetMap Nominatim (Final Fallback)
-    # ------------------------------------------------------------------
+    # 3. OpenStreetMap Nominatim
     try:
         nom_url = f"https://nominatim.openstreetmap.org/search?q={urllib.parse.quote(clean_addr)}&format=json&countrycodes=us&limit=1"
         res = requests.get(nom_url, headers=GEOCODE_HEADERS, timeout=5.0)
@@ -296,36 +289,36 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# UTILITY: WEATHER DATA ENGINE (USES STORED GEODATA)
+# UTILITY: WEATHER DATA ENGINE & DYNAMIC NARRATIVE
 # ============================================================================
 
 def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict:
-    max_wind_mph = 52.0
-    max_hail_in = 1.25
-    dbz = 52
-    primary_source = "Open-Meteo Historical Weather API & IEM / NWS Radar Archive"
+    """
+    Queries Open-Meteo Historical Archive and IEM NWS Spotter Network.
+    Zeros out baselines if no severe weather was logged to prevent false claims.
+    """
+    max_wind_mph = 0.0
+    max_hail_in = 0.0
     citation_notes = []
 
-    # Source 1: Open-Meteo
+    # 1. Fetch Real Wind Speed from Open-Meteo Archive
     try:
         om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
-        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=3.0)
+        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=4.0)
         if res.status_code == 200:
             om_data = res.json()
             gusts = om_data.get("hourly", {}).get("wind_gusts_10m", [])
             valid_gusts = [g for g in gusts if g is not None]
             if valid_gusts:
-                om_max_wind = round(max(valid_gusts), 1)
-                if om_max_wind > max_wind_mph:
-                    max_wind_mph = om_max_wind
-                citation_notes.append(f"Open-Meteo API logged peak surface gusts of {om_max_wind} mph.")
+                max_wind_mph = round(max(valid_gusts), 1)
+                citation_notes.append(f"Open-Meteo Historical API recorded peak surface gusts of {max_wind_mph} mph.")
     except Exception:
         pass
 
-    # Source 2: IEM / NWS Reports
+    # 2. Fetch Verified Hail Spotter Logs from IEM / NWS
     try:
         iem_url = f"https://mesonet.agron.iastate.edu/geojson/lsr.php?sts={dol}T00:00Z&ets={dol}T23:59Z"
-        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=3.0)
+        res_iem = requests.get(iem_url, headers=GEOCODE_HEADERS, timeout=4.0)
         if res_iem.status_code == 200:
             features = res_iem.json().get("features", [])
             hail_reports = []
@@ -337,64 +330,65 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str) -> Dict
                     if val and val > 0:
                         hail_reports.append(float(val))
             if hail_reports:
-                iem_hail = max(hail_reports)
-                if iem_hail >= max_hail_in:
-                    max_hail_in = iem_hail
-                    citation_notes.append(f"IEM NWS Spotter Log verified peak hail measurement of {iem_hail}\".")
+                max_hail_in = round(max(hail_reports), 2)
+                citation_notes.append(f"IEM NWS Spotter Network logged maximum hail diameter of {max_hail_in}\".")
     except Exception:
         pass
 
-    dbz = int(48 + (max_hail_in * 8))
-    if not citation_notes:
-        citation_notes.append("Cross-referenced across Open-Meteo Weather Engine & IEM NEXRAD Severe Weather Archive.")
+    # Formatted display labels
+    hail_display = f"{max_hail_in}\"" if max_hail_in > 0 else "No Severe Hail Logged"
+    wind_display = f"{max_wind_mph} mph" if max_wind_mph > 0 else "N/A"
 
-    storm_time_str = f"{dol} Peak Cell Traversal (CDT)" if dol else "Verified Date of Loss"
+    # Dynamic Reflectivity Classification
+    if max_hail_in >= 1.75:
+        dbz_display = "60+ dBZ (Severe Core)"
+    elif max_hail_in >= 1.0:
+        dbz_display = "50-55 dBZ (Hail Core)"
+    elif max_wind_mph >= 50:
+        dbz_display = "45-50 dBZ (High Wind Cell)"
+    else:
+        dbz_display = "Standard Reflectivity"
+
+    if not citation_notes:
+        citation_notes.append("Automated historical cross-reference completed across Open-Meteo & IEM NWS archives.")
 
     return {
         "lat": lat,
         "lon": lon,
         "matched_address": matched_addr,
         "maps_url": f"https://www.google.com/maps?q={lat},{lon}",
-        "peak_hail_size_inches": max_hail_in,
-        "radar_reflectivity_dbz": dbz,
-        "wind_gust_speed_mph": max_wind_mph,
-        "distance_from_property_miles": 0.4,
-        "storm_direction": "SW to NE",
-        "storm_timestamp": storm_time_str,
-        "data_source_citation": primary_source,
+        "peak_hail_size_inches": hail_display,
+        "radar_reflectivity_dbz": dbz_display,
+        "wind_gust_speed_mph": wind_display,
+        "raw_wind": max_wind_mph,
+        "raw_hail": max_hail_in,
+        "storm_timestamp": f"{dol} Observation Window",
+        "data_source_citation": "Open-Meteo Weather API & IEM / NWS LSR Archive",
         "citation_details": " | ".join(citation_notes)
     }
 
 
-def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_date: str, property_address: str, dol: str) -> str:
-    hail = noaa_data["peak_hail_size_inches"]
-    wind = noaa_data["wind_gust_speed_mph"]
-   
-    risk_level = "MODERATE"
-    if hail >= 1.75 or wind >= 75:
-        risk_level = "HIGH"
-    elif hail >= 1.5 or wind >= 60:
-        risk_level = "MODERATE-HIGH"
-   
-    if "Post-Inspection" in report_type:
-        summary = (
-            f"<b>Storm Impact Risk Assessment: {risk_level} (Inspection Completed)</b><br/>"
-            f"On <b>{inspection_date}</b>, a comprehensive physical on-site inspection of the property located at "
-            f"<b>{property_address}</b> was conducted by Belmont Construction. The objective was to document physical evidence of storm-induced "
-            f"impact associated with the weather event occurring on <b>{dol}</b>. "
-            f"Physical findings detailed in this report confirm severe hail and wind impact across elevated surfaces, roof accessories, soft metals, "
-            f"and ground collateral consistent with severe weather tracking in this geographic core ({noaa_data['distance_from_property_miles']} miles to storm core track)."
-        )
+def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_date: str, property_address: str, dol: str, inspection_finding: str) -> str:
+    """Generates an adjuster-ready narrative combining physical field findings with meteorological context."""
+    
+    # Physical Observation Narrative Clause
+    if "Severe" in inspection_finding:
+        obs_clause = "On-site physical roof inspection confirmed direct storm damage, including wind-creased/lifted shingles, displaced tab integrity, and/or mechanical impact marks to soft metals and elevated components."
+    elif "Moderate" in inspection_finding:
+        obs_clause = "On-site physical evaluation revealed localized collateral damage, gutter/fascia impacts, and minor shingle compromise consistent with severe weather exposure."
+    elif "Normal" in inspection_finding:
+        obs_clause = "On-site physical inspection noted general age-related weathering and normal wear. No functional storm-created openings or direct loss was observed from this specific event."
     else:
-        summary = (
-            f"<b>Storm Impact Risk Assessment: {risk_level} (Pre-Inspection Assessment)</b><br/>"
-            f"Peak hail size of {hail}\" with wind gusts to {wind} mph indicates "
-            f"{'significant roof and siding exposure' if risk_level in ['HIGH', 'MODERATE-HIGH'] else 'moderate structural exposure'}. "
-            f"Property is {noaa_data['distance_from_property_miles']} miles from storm core track. "
-            f"Direction: {noaa_data['storm_direction']}. "
-            f"Recommend detailed physical inspection of all elevated surfaces, vent penetrations, and soft-metal components."
-        )
-    return summary
+        obs_clause = "Pre-inspection meteorological analysis conducted to establish site exposure prior to physical on-site verification."
+
+    # Weather Correlation Clause
+    weather_clause = (
+        f"Historical meteorological archives for <b>{property_address}</b> on loss date <b>{dol}</b> "
+        f"log peak recorded surface gusts of <b>{noaa_data.get('wind_gust_speed_mph', 'N/A')}</b> "
+        f"and verified local hail activity of <b>{noaa_data.get('peak_hail_size_inches', 'N/A')}</b>."
+    )
+
+    return f"<b>Field Observation:</b> {obs_clause}<br/><br/><b>Meteorological Context:</b> {weather_clause}"
 
 # ============================================================================
 # CORE: PDF GENERATION WITH REPORTLAB
@@ -410,6 +404,7 @@ def generate_adjuster_pdf(
     inspection_date: str,
     report_type: str,
     local_office: str,
+    inspection_finding: str,
     noaa_data: Dict,
     photo_categories_data: Dict[str, List[Dict]],
     logo_path: str = "BELMONT_LOGO.png"
@@ -485,6 +480,7 @@ def generate_adjuster_pdf(
         [Paragraph("<b>Customer Name:</b>", NORMAL_STYLE), Paragraph(customer_name, NORMAL_STYLE)],
         [Paragraph("<b>Date of Loss (DOL):</b>", NORMAL_STYLE), Paragraph(dol, NORMAL_STYLE)],
         [Paragraph("<b>Inspection Date:</b>", NORMAL_STYLE), Paragraph(inspection_date, NORMAL_STYLE)],
+        [Paragraph("<b>Physical Finding:</b>", NORMAL_STYLE), Paragraph(inspection_finding, NORMAL_STYLE)],
         [Paragraph("<b>Report Type:</b>", NORMAL_STYLE), Paragraph(report_type, NORMAL_STYLE)],
     ]
    
@@ -507,13 +503,11 @@ def generate_adjuster_pdf(
    
     noaa_data_table_data = [
         ["Metric", "Value"],
-        ["Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\""],
-        ["Radar Reflectivity", f"{noaa_data['radar_reflectivity_dbz']} dBZ"],
-        ["Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph"],
-        ["Distance to Storm Core Track*", f"{noaa_data['distance_from_property_miles']} miles"],
-        ["Storm Direction", noaa_data['storm_direction']],
-        ["Storm Timestamp", noaa_data['storm_timestamp']],
-        ["Verified Data Sources", noaa_data.get('data_source_citation', 'NOAA / IEM / Open-Meteo')],
+        ["Verified Hail Diameter", f"{noaa_data.get('peak_hail_size_inches', 'N/A')}"],
+        ["Peak Surface Wind Gust", f"{noaa_data.get('wind_gust_speed_mph', 'N/A')}"],
+        ["Radar Reflectivity Classification", f"{noaa_data.get('radar_reflectivity_dbz', 'N/A')}"],
+        ["Observation Window", noaa_data.get('storm_timestamp', 'N/A')],
+        ["Primary Data Sources", noaa_data.get('data_source_citation', 'Open-Meteo & IEM NWS')],
     ]
    
     noaa_table = Table(noaa_data_table_data, colWidths=[2.5*inch, 4*inch])
@@ -532,13 +526,13 @@ def generate_adjuster_pdf(
    
     story.append(noaa_table)
     story.append(Spacer(1, 0.05*inch))
-    story.append(Paragraph(f"*<i>Citation Footnote: {noaa_data.get('citation_details', '')} Distance to Storm Core Track measures proximity between property coordinates and the max radar reflectivity cell.</i>", FOOTNOTE_STYLE))
+    story.append(Paragraph(f"*<i>Citation Footnote: {noaa_data.get('citation_details', '')}</i>", FOOTNOTE_STYLE))
     story.append(Spacer(1, 0.15*inch))
    
-    risk_title = Paragraph("STORM IMPACT ASSESSMENT", TITLE_STYLE)
+    risk_title = Paragraph("STORM IMPACT ASSESSMENT & FIELD SUMMARY", TITLE_STYLE)
     story.append(risk_title)
    
-    risk_summary = generate_storm_risk_summary(noaa_data, report_type, inspection_date, property_address, dol)
+    risk_summary = generate_storm_risk_summary(noaa_data, report_type, inspection_date, property_address, dol, inspection_finding)
     story.append(Paragraph(risk_summary, NORMAL_STYLE))
    
     story.append(PageBreak())
@@ -940,17 +934,24 @@ def main():
                
                 if not uploaded_files and ss.photo_data[category_name]:
                     ss.photo_data[category_name] = []
-       
+
+        # PHYSICAL OBSERVATION SELECTOR
+        st.markdown('<div class="section-header">🔍 Field Observation (Quick Selection)</div>', unsafe_allow_html=True)
+        inspection_finding = st.segmented_control(
+            "Select Physical Inspection Finding:",
+            options=["🔴 Severe Damage", "🟡 Moderate Damage", "🟢 Normal Wear", "🔍 Pre-Inspection Only"],
+            default="🔴 Severe Damage"
+        )
+
         st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
        
         col1, col2 = st.columns([2, 1])
         with col1:
-            fetch_noaa = st.checkbox("Include NOAA Radar & Storm Core Verification", value=True)
+            fetch_noaa = st.checkbox("Include NOAA Radar & Weather Verification", value=True)
         with col2:
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
        
         if fetch_noaa:
-            # Uses locked geocoded coordinates if available, otherwise prompts user
             if ss.geocoded_data and ss.geocoded_data.get('lat') is not None:
                 lat = ss.geocoded_data['lat']
                 lon = ss.geocoded_data['lon']
@@ -972,13 +973,26 @@ def main():
                     unsafe_allow_html=True
                 )
 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Peak Hail Size", f"{noaa_data['peak_hail_size_inches']}\"")
-                with col2:
-                    st.metric("Wind Gust Speed", f"{noaa_data['wind_gust_speed_mph']} mph")
-                with col3:
-                    st.metric("Core Track Distance", f"{noaa_data['distance_from_property_miles']} mi")
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    st.metric("Peak Surface Wind", noaa_data["wind_gust_speed_mph"])
+                with m2:
+                    st.metric("Verified Hail Size", noaa_data["peak_hail_size_inches"])
+                with m3:
+                    st.metric("Radar Reflectivity", noaa_data["radar_reflectivity_dbz"])
+
+                # Generated Narrative Preview
+                narrative_preview = generate_storm_risk_summary(
+                    noaa_data=noaa_data,
+                    report_type=report_type,
+                    inspection_date=inspection_date_val.strftime("%Y-%m-%d"),
+                    property_address=noaa_data['matched_address'],
+                    dol=dol,
+                    inspection_finding=inspection_finding
+                )
+                st.markdown("##### Generated Narrative Preview")
+                st.info(narrative_preview, icon="📝")
+
             else:
                 noaa_data = None
                 st.warning("⚠️ **GPS Coordinates Not Locked:** Please type the address in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch weather radar metrics.")
@@ -1009,6 +1023,7 @@ def main():
                             inspection_date=inspection_date_val.strftime("%Y-%m-%d"),
                             report_type=report_type,
                             local_office=local_office,
+                            inspection_finding=inspection_finding,
                             noaa_data=noaa_data or {},
                             photo_categories_data=photo_data_filtered
                         )
