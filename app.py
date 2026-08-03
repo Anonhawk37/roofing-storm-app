@@ -290,16 +290,19 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# WEATHER DATA ENGINE: VISUAL CROSSING TIMELINE API
+# WEATHER DATA ENGINE: VISUAL CROSSING TIMELINE API (WITH SEVERE EVENTS)
 # ============================================================================
 
-def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_radius_miles: float = 35.0) -> Dict:
+def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_radius_miles: float = 30.0) -> Dict:
     """
     Direct property-level weather engine using Visual Crossing Timeline API.
-    Handles local time zones automatically and extracts radar/station hail & wind metrics.
+    Explicitly requests severe event logs (`include=days,events,alerts`) to extract
+    hail stone size (inches) and severe wind gusts within max_radius_miles.
     """
     max_hail_in = 0.0
     max_wind_mph = 0.0
+    hail_reports_count = 0
+    wind_reports_count = 0
     citation_notes = []
 
     # Get API Key from Streamlit Secrets
@@ -321,56 +324,91 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
             "citation_details": "Please configure VISUAL_CROSSING_KEY in Streamlit Secrets."
         }
 
+    # Convert radius miles to meters for Visual Crossing maxDistance parameter (30 mi ~= 48280 m)
+    max_dist_meters = int(max_radius_miles * 1609.34)
+
     try:
-        # Visual Crossing Timeline API endpoint (local property time zone auto-handled)
+        # CRITICAL FIX: include=days,events,alerts instructs VC to parse and return logged hail/wind events
         vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}"
         params = {
             'unitGroup': 'us',
             'key': api_key,
-            'include': 'days,events',
-            'elements': 'datetime,windgust,precip,hail,events'
+            'include': 'days,events,alerts',
+            'maxDistance': str(max_dist_meters)
         }
         
-        res = requests.get(vc_url, params=params, timeout=8.0)
+        res = requests.get(vc_url, params=params, timeout=10.0)
         if res.status_code == 200:
             data = res.json()
             days = data.get('days', [])
             
+            # 1. Gather all logged severe events
+            events = data.get('events', [])
+            if days and 'events' in days[0]:
+                events.extend(days[0].get('events', []))
+
+            for event in events:
+                event_type = str(event.get('type', '')).lower()
+                val = event.get('value')  # 'value' in hail events represents diameter in inches
+
+                if 'hail' in event_type and val is not None:
+                    try:
+                        hail_size = float(val)
+                        hail_reports_count += 1
+                        if hail_size > max_hail_in:
+                            max_hail_in = hail_size
+                    except ValueError:
+                        pass
+
+                elif ('wind' in event_type or 'gust' in event_type) and val is not None:
+                    try:
+                        wind_val = float(val)
+                        wind_reports_count += 1
+                        if wind_val > max_wind_mph:
+                            max_wind_mph = wind_val
+                    except ValueError:
+                        pass
+
+            # 2. Check general day metrics if no point-event wind was captured
             if days:
                 day_data = days[0]
+                day_wind = float(day_data.get('windgust', 0.0) or day_data.get('windspeed', 0.0) or 0.0)
+                if day_wind > max_wind_mph:
+                    max_wind_mph = day_wind
                 
-                # Direct property-level metrics
-                max_hail_in = float(day_data.get('hail', 0.0) or 0.0)
-                max_wind_mph = float(day_data.get('windgust', 0.0) or 0.0)
-                
-                events = day_data.get('events', [])
-                hail_events = [e for e in events if 'hail' in str(e).lower()]
-                
-                if hail_events:
-                    citation_notes.append(f"Visual Crossing verified {len(hail_events)} severe hail report(s) in property target zone.")
-                else:
-                    citation_notes.append("Visual Crossing property-level radar weather scan completed.")
+                # Fallback hail check on day level if available
+                day_hail = float(day_data.get('hail', 0.0) or 0.0)
+                if day_hail > max_hail_in:
+                    max_hail_in = day_hail
+
+            if hail_reports_count > 0 or max_hail_in > 0:
+                citation_notes.append(
+                    f"Visual Crossing verified {hail_reports_count} spotter/radar hail report(s) (Peak: {max_hail_in}\") "
+                    f"and wind activity within {max_radius_miles} miles."
+                )
             else:
-                citation_notes.append("Visual Crossing query completed (no record found for date).")
+                citation_notes.append(f"Visual Crossing property weather scan completed: No logged hail events within {max_radius_miles} miles on {dol}.")
         else:
-            citation_notes.append(f"Visual Crossing API responded with status {res.status_code}.")
-            
+            citation_notes.append(f"Visual Crossing API error: HTTP {res.status_code}")
+
     except Exception as e:
         citation_notes.append(f"Weather query error: {str(e)}")
 
     # Formatted display labels for PDF and Streamlit UI
     if max_hail_in > 0:
-        hail_display = f"{max_hail_in}\" Hail Logged"
+        hail_display = f'{max_hail_in}" Hail Logged'
     else:
         hail_display = "No Severe Hail Logged"
         
-    wind_display = f"{max_wind_mph} mph" if max_wind_mph > 0 else "N/A"
+    wind_display = f"{max_wind_mph:.0f} mph" if max_wind_mph > 0 else "N/A"
 
     # Dynamic Radar Reflectivity Classification
     if max_hail_in >= 1.75:
-        dbz_display = "60+ dBZ (Severe Hail Core)"
+        dbz_display = "65+ dBZ (Golf Ball+ Hail Core)"
     elif max_hail_in >= 1.0:
-        dbz_display = "50-55 dBZ (Hail Core)"
+        dbz_display = "55-60 dBZ (Quarter+ Hail Core)"
+    elif max_hail_in > 0:
+        dbz_display = "50-55 dBZ (Sub-Severe Hail)"
     elif max_wind_mph >= 50:
         dbz_display = "45-50 dBZ (High Wind Cell)"
     else:
@@ -981,7 +1019,7 @@ def main():
                 lon = ss.geocoded_data['lon']
                 matched_addr = ss.geocoded_data['matched_address']
 
-                noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown", max_radius_miles=35.0)
+                noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown", max_radius_miles=30.0)
                
                 # GPS Verification Card
                 st.markdown(
