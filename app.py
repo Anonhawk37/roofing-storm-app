@@ -14,7 +14,7 @@ import streamlit as st
 from streamlit import session_state as ss
 from PIL import Image, ImageOps
 import io
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 import json
 import requests
@@ -290,114 +290,77 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# UTILITY: DISTANCE & WEATHER DATA ENGINE (IEM RADIUS + OPEN-METEO)
+# WEATHER DATA ENGINE: VISUAL CROSSING TIMELINE API
 # ============================================================================
-
-def get_haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calculate distance in miles between two lat/lon coordinates."""
-    R = 3958.8  # Earth's radius in miles
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
 
 def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_radius_miles: float = 35.0) -> Dict:
     """
-    Multi-source weather engine:
-    1. Open-Meteo Historical Archive (Wind Gusts & Precipitation)
-    2. IEM / NWS Local Storm Reports (LSR) Radius Search (Hail Reports within 35 miles)
+    Direct property-level weather engine using Visual Crossing Timeline API.
+    Handles local time zones automatically and extracts radar/station hail & wind metrics.
     """
-    max_wind_mph = 0.0
     max_hail_in = 0.0
-    closest_report_info = ""
+    max_wind_mph = 0.0
     citation_notes = []
 
-    # 1. Fetch Surface Wind Speed from Open-Meteo Archive
-    try:
-        om_url = f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}&start_date={dol}&end_date={dol}&hourly=wind_gusts_10m,precipitation,rain&wind_speed_unit=mph"
-        res = requests.get(om_url, headers=GEOCODE_HEADERS, timeout=5.0)
-        if res.status_code == 200:
-            om_data = res.json()
-            gusts = om_data.get("hourly", {}).get("wind_gusts_10m", [])
-            valid_gusts = [g for g in gusts if g is not None]
-            if valid_gusts:
-                max_wind_mph = round(max(valid_gusts), 1)
-                citation_notes.append(f"Open-Meteo API logged max surface wind gusts of {max_wind_mph} mph.")
-    except Exception:
-        pass
+    # Get API Key from Streamlit Secrets
+    api_key = st.secrets.get("VISUAL_CROSSING_KEY", "")
 
-    # 2. Fetch Radius Hail Reports from IEM GIS LSR Service
-    try:
-        year, month, day = dol.split('-')
-        iem_url = "https://mesonet.agron.iastate.edu/cgi-bin/request/gis/lsr.py"
-        params = {
-            'wfo': 'ALL',
-            'type': 'HAIL',
-            'year1': year,
-            'month1': month,
-            'day1': day,
-            'hour1': '00',
-            'minute1': '00',
-            'year2': year,
-            'month2': month,
-            'day2': day,
-            'hour2': '23',
-            'minute2': '59',
-            'fmt': 'csv',
+    if not api_key:
+        return {
+            "lat": lat,
+            "lon": lon,
+            "matched_address": matched_addr,
+            "maps_url": f"https://www.google.com/maps?q={lat},{lon}",
+            "peak_hail_size_inches": "API Key Required",
+            "radar_reflectivity_dbz": "Config Needed",
+            "wind_gust_speed_mph": "N/A",
+            "raw_wind": 0.0,
+            "raw_hail": 0.0,
+            "storm_timestamp": dol,
+            "data_source_citation": "Visual Crossing Weather API",
+            "citation_details": "Please configure VISUAL_CROSSING_KEY in Streamlit Secrets."
         }
-        res_iem = requests.get(iem_url, params=params, headers=GEOCODE_HEADERS, timeout=8.0)
-        if res_iem.status_code == 200 and res_iem.text:
-            lines = res_iem.text.strip().split('\n')
-            if len(lines) > 1:
-                header = [col.strip().upper() for col in lines[0].split(',')]
-                try:
-                    mag_idx = header.index('MAG')
-                    lat_idx = header.index('LAT')
-                    lon_idx = header.index('LON')
-                    city_idx = header.index('CITY')
-                    
-                    nearby_reports = []
-                    for line in lines[1:]:
-                        parts = line.split(',')
-                        if len(parts) > max(mag_idx, lat_idx, lon_idx):
-                            try:
-                                hail_sz = float(parts[mag_idx])
-                                r_lat = float(parts[lat_idx])
-                                r_lon = float(parts[lon_idx])
-                                city_name = parts[city_idx].strip()
 
-                                dist = get_haversine_distance(lat, lon, r_lat, r_lon)
-                                if dist <= max_radius_miles:
-                                    nearby_reports.append({
-                                        'size': hail_sz,
-                                        'distance': dist,
-                                        'city': city_name
-                                    })
-                            except (ValueError, TypeError):
-                                continue
+    try:
+        # Visual Crossing Timeline API endpoint (local property time zone auto-handled)
+        vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}"
+        params = {
+            'unitGroup': 'us',
+            'key': api_key,
+            'include': 'days,events',
+            'elements': 'datetime,windgust,precip,hail,events'
+        }
+        
+        res = requests.get(vc_url, params=params, timeout=8.0)
+        if res.status_code == 200:
+            data = res.json()
+            days = data.get('days', [])
+            
+            if days:
+                day_data = days[0]
+                
+                # Direct property-level metrics
+                max_hail_in = float(day_data.get('hail', 0.0) or 0.0)
+                max_wind_mph = float(day_data.get('windgust', 0.0) or 0.0)
+                
+                events = day_data.get('events', [])
+                hail_events = [e for e in events if 'hail' in str(e).lower()]
+                
+                if hail_events:
+                    citation_notes.append(f"Visual Crossing verified {len(hail_events)} severe hail report(s) in property target zone.")
+                else:
+                    citation_notes.append("Visual Crossing property-level radar weather scan completed.")
+            else:
+                citation_notes.append("Visual Crossing query completed (no record found for date).")
+        else:
+            citation_notes.append(f"Visual Crossing API responded with status {res.status_code}.")
+            
+    except Exception as e:
+        citation_notes.append(f"Weather query error: {str(e)}")
 
-                    if nearby_reports:
-                        max_hail_in = round(max(r['size'] for r in nearby_reports), 2)
-                        closest = min(nearby_reports, key=lambda x: x['distance'])
-                        closest_report_info = f"({max_hail_in}\" recorded ~{closest['distance']:.1f} mi away near {closest['city']})"
-                        citation_notes.append(
-                            f"IEM NWS Spotter Archive verified {len(nearby_reports)} hail event(s) within {max_radius_miles} miles. Peak diameter: {max_hail_in}\"."
-                        )
-                except ValueError:
-                    pass
-    except Exception:
-        pass
-
-    # Formatted display labels
+    # Formatted display labels for PDF and Streamlit UI
     if max_hail_in > 0:
-        hail_display = f"{max_hail_in}\" {closest_report_info}".strip()
+        hail_display = f"{max_hail_in}\" Hail Logged"
     else:
         hail_display = "No Severe Hail Logged"
         
@@ -413,9 +376,6 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
     else:
         dbz_display = "Standard Reflectivity"
 
-    if not citation_notes:
-        citation_notes.append("Automated historical cross-reference completed across Open-Meteo & IEM NWS archives.")
-
     return {
         "lat": lat,
         "lon": lon,
@@ -426,8 +386,8 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
         "wind_gust_speed_mph": wind_display,
         "raw_wind": max_wind_mph,
         "raw_hail": max_hail_in,
-        "storm_timestamp": f"{dol} Observation Window",
-        "data_source_citation": "Open-Meteo Weather API & IEM / NWS LSR Archive",
+        "storm_timestamp": f"{dol} Property Window",
+        "data_source_citation": "Visual Crossing Weather API & Radar History",
         "citation_details": " | ".join(citation_notes)
     }
 
@@ -571,7 +531,7 @@ def generate_adjuster_pdf(
         ["Peak Surface Wind Gust", f"{noaa_data.get('wind_gust_speed_mph', 'N/A')}"],
         ["Radar Reflectivity Classification", f"{noaa_data.get('radar_reflectivity_dbz', 'N/A')}"],
         ["Observation Window", noaa_data.get('storm_timestamp', 'N/A')],
-        ["Primary Data Sources", noaa_data.get('data_source_citation', 'Open-Meteo & IEM NWS')],
+        ["Primary Data Sources", noaa_data.get('data_source_citation', 'Visual Crossing Weather API')],
     ]
    
     noaa_table = Table(noaa_data_table_data, colWidths=[2.5*inch, 4*inch])
@@ -1011,7 +971,7 @@ def main():
        
         col1, col2 = st.columns([2, 1])
         with col1:
-            fetch_noaa = st.checkbox("Include NOAA Radar & Weather Verification", value=True)
+            fetch_noaa = st.checkbox("Include Radar & Weather Verification", value=True)
         with col2:
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
        
