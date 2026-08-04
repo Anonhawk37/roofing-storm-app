@@ -1,6 +1,7 @@
 """
 Storm & Roof Damage Inspection App
 Mobile-friendly field rep tool for Belmont Construction
+Multi-Source Hail Aggregator: NOAA LSR + NWS Alerts + SPC + Visual Crossing
 Generates professional adjuster-grade PDF reports with photo inspection grids & High-Res Appendix
 """
 
@@ -75,7 +76,6 @@ CARRIER_HOTLINES = [
     ("American Modern", "18003752075")
 ]
 
-# Browser-like headers to prevent cloud IP/User-Agent blocks across all external APIs
 GEOCODE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'application/json, text/plain, */*',
@@ -131,11 +131,11 @@ APPENDIX_CAPTION_STYLE = ParagraphStyle(
 )
 
 # ============================================================================
-# UTILITY: BASE64 IMAGE ENCODER FOR HTML INJECTION
+# UTILITY: BASE64 IMAGE ENCODER
 # ============================================================================
 
 def get_image_base64(image_path: str) -> str:
-    """Reads a local image file and converts it into a base64 Data URI for inline HTML rendering."""
+    """Reads a local image file and converts it into base64 Data URI."""
     if not os.path.exists(image_path):
         return ""
     with open(image_path, "rb") as img_file:
@@ -145,28 +145,20 @@ def get_image_base64(image_path: str) -> str:
     return f"data:image/{mime_type};base64,{encoded}"
 
 # ============================================================================
-# UTILITY: BULLETPROOF MULTI-ENGINE GEOCODER
+# UTILITY: MULTI-ENGINE GEOCODER
 # ============================================================================
 
 def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Optional[float], str]:
-    """
-    Multi-engine geocoder supporting standard addresses, city/state, or 5-digit zip codes.
-    Tries: 1. ArcGIS World Geocoder -> 2. US Census Bureau API -> 3. OpenStreetMap Nominatim
-    """
+    """Multi-engine geocoder: ArcGIS → Census Bureau → OpenStreetMap"""
     if not address_str or len(address_str.strip()) < 3:
         return None, None, "Please enter a valid property address or zip code."
 
     clean_addr = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE).strip()
 
-    # 1. ESRI ArcGIS World Geocoding
+    # 1. ESRI ArcGIS
     try:
         arcgis_url = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
-        params = {
-            'f': 'json',
-            'singleLine': clean_addr,
-            'maxLocations': 1,
-            'outFields': 'Match_addr'
-        }
+        params = {'f': 'json', 'singleLine': clean_addr, 'maxLocations': 1, 'outFields': 'Match_addr'}
         res = requests.get(arcgis_url, params=params, headers=GEOCODE_HEADERS, timeout=5.0)
         if res.status_code == 200:
             data = res.json()
@@ -180,14 +172,10 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     except Exception:
         pass
 
-    # 2. US Census Bureau Geocoder
+    # 2. US Census Bureau
     try:
         census_url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
-        params = {
-            'address': clean_addr,
-            'benchmark': 'Public_AR_Current',
-            'format': 'json'
-        }
+        params = {'address': clean_addr, 'benchmark': 'Public_AR_Current', 'format': 'json'}
         res = requests.get(census_url, params=params, headers=GEOCODE_HEADERS, timeout=5.0)
         if res.status_code == 200:
             data = res.json()
@@ -217,31 +205,26 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     return None, None, f"Could not locate '{address_str}'. Please verify details."
 
 # ============================================================================
-# UTILITY: IMAGE COMPRESSION & ASPECT RATIO MANAGEMENT
+# UTILITY: IMAGE COMPRESSION
 # ============================================================================
 
 def compress_image(uploaded_file, max_width: int = 1200, max_height: int = 900, quality: int = 75) -> Tuple[bytes, int]:
     try:
         img = Image.open(uploaded_file)
         img = ImageOps.exif_transpose(img)
-       
         if img.mode in ('RGBA', 'LA', 'P'):
             rgb_img = Image.new('RGB', img.size, (255, 255, 255))
             rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
             img = rgb_img
-       
         img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
-       
         output = io.BytesIO()
         img.save(output, format='JPEG', quality=quality, optimize=True)
         compressed_bytes = output.getvalue()
         file_size_kb = len(compressed_bytes) / 1024
-       
         return compressed_bytes, file_size_kb
     except Exception as e:
         st.error(f"Error compressing image: {e}")
         return None, 0
-
 
 def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> RLImage:
     if isinstance(img_input, bytes):
@@ -250,13 +233,10 @@ def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> 
     else:
         pil_img = Image.open(img_input)
         img_source = img_input
-
     w, h = pil_img.size
     aspect = h / float(w)
-    
     max_w = max_w_inches * inch
     max_h = max_h_inches * inch
-
     if w > h:
         new_w = max_w
         new_h = max_w * aspect
@@ -269,9 +249,7 @@ def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> 
         if new_w > max_w:
             new_w = max_w
             new_h = max_w * aspect
-
     return RLImage(img_source, width=new_w, height=new_h)
-
 
 def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     processed_photos = []
@@ -290,177 +268,240 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# WEATHER DATA ENGINE: VISUAL CROSSING TIMELINE API (WITH SEVERE EVENTS)
+# WEATHER ENGINE: MULTI-SOURCE HAIL AGGREGATOR
+# Priority: NOAA LSR > NWS Alerts > SPC > Visual Crossing
 # ============================================================================
 
 def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_radius_miles: float = 30.0) -> Dict:
     """
-    Direct property-level weather engine using Visual Crossing Timeline API.
-    Pulls historical hail and severe wind data for the specific date of loss.
+    Multi-source hail aggregator pulling from NOAA LSRs, NWS Alerts, SPC, and Visual Crossing.
     """
     max_hail_in = 0.0
     max_wind_mph = 0.0
     citation_notes = []
     debug_info = []
+    sources_checked = []
 
-    # Get API Key from Streamlit Secrets
-    api_key = st.secrets.get("VISUAL_CROSSING_KEY", "")
-
-    if not api_key:
-        return {
-            "lat": lat,
-            "lon": lon,
-            "matched_address": matched_addr,
-            "maps_url": f"https://www.google.com/maps?q={lat},{lon}",
-            "peak_hail_size_inches": "API Key Required",
-            "radar_reflectivity_dbz": "Config Needed",
-            "wind_gust_speed_mph": "N/A",
-            "raw_wind": 0.0,
-            "raw_hail": 0.0,
-            "storm_timestamp": dol,
-            "data_source_citation": "Visual Crossing Weather API",
-            "citation_details": "Please configure VISUAL_CROSSING_KEY in Streamlit Secrets."
-        }
-
+    # ========== SOURCE 1: NOAA LSR DATABASE (Ground Spotters - Most Accurate) ==========
     try:
-        # TRY MULTIPLE API CONFIGURATIONS TO MAXIMIZE HAIL DATA RETRIEVAL
+        from datetime import datetime as dt
+        dol_date = dt.strptime(dol, "%Y-%m-%d")
+        year = dol_date.year
+        month = dol_date.month
+        day = dol_date.day
         
-        # ATTEMPT 1: Standard Timeline with elements specified
-        vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}"
+        sources_checked.append("NOAA LSR Database")
+        
+        # NOAA Storm Events CSV endpoint
+        nws_url = "https://www.ncei.noaa.gov/access/severe-weather/data/download"
         params = {
-            'unitGroup': 'us',
-            'key': api_key,
-            'include': 'days,alerts,events',  # Request events for hail detection
-            'elements': 'preciptype,precip,hail,windgust,windspeed,severerisk'  # Explicitly request hail
+            'dataformat': 'csv',
+            'year': year,
+            'month': month,
+            'type': 'hail'
         }
         
-        res = requests.get(vc_url, params=params, headers=GEOCODE_HEADERS, timeout=10.0)
+        res = requests.get(nws_url, params=params, headers=GEOCODE_HEADERS, timeout=8.0)
         
         if res.status_code == 200:
-            data = res.json()
-            days = data.get('days', [])
+            lines = res.text.split('\n')
+            found_lsrs = []
             
-            # DEBUG: Log available fields
-            if days:
-                day_data = days[0]
-                available_fields = list(day_data.keys())
-                debug_info.append(f"Available fields in response: {', '.join(available_fields)}")
-            
-            # PRIMARY METHOD: Extract hail and wind from daily metrics
-            if days:
-                day_data = days[0]
+            for line in lines:
+                if not line.strip() or line.startswith('BEGIN') or line.startswith('YEAR'):
+                    continue
                 
-                # Method 1: Direct hail field
                 try:
-                    hail_value = day_data.get('hail')
-                    if hail_value is not None and hail_value != 0:
-                        max_hail_in = float(hail_value)
-                        debug_info.append(f"✓ Hail found in 'hail' field: {max_hail_in}\"")
-                except (ValueError, TypeError):
-                    pass
-                
-                # Method 2: Check preciptype for hail signature
-                if max_hail_in == 0:
+                    parts = [p.strip() for p in line.split(',')]
+                    if len(parts) < 6:
+                        continue
+                    
                     try:
-                        precip_types = day_data.get('preciptype', [])
-                        if isinstance(precip_types, list):
-                            if 'hail' in precip_types:
-                                # If hail is in preciptype but no hail size, use precip as proxy
-                                precip_amount = day_data.get('precip', 0)
-                                if precip_amount > 0.5:  # Significant precipitation = likely hail
-                                    max_hail_in = 0.75  # Conservative estimate for hail presence
-                                    debug_info.append(f"✓ Hail detected via preciptype. Precip: {precip_amount}\" → estimated hail size: 0.75\"")
-                    except (ValueError, TypeError):
-                        pass
-                
-                # Method 3: Check severe risk for hail indicator
-                if max_hail_in == 0:
-                    try:
-                        severe_risk = day_data.get('severerisk', 0)
-                        if severe_risk > 15:  # High severe risk often correlates with hail
-                            debug_info.append(f"⚠ High severe weather risk ({severe_risk}%) detected but no hail size recorded")
-                    except (ValueError, TypeError):
-                        pass
-                
-                # Read wind gust from the day's windgust metric
-                try:
-                    windgust_value = day_data.get('windgust')
-                    if windgust_value is not None:
-                        max_wind_mph = float(windgust_value)
-                    else:
-                        # Fallback to windspeed if windgust not available
-                        windspeed_value = day_data.get('windspeed')
-                        if windspeed_value is not None:
-                            max_wind_mph = float(windspeed_value)
-                except (ValueError, TypeError):
-                    max_wind_mph = 0.0
-                
-                # Method 4: Check events array for hail reports
-                if max_hail_in == 0:
-                    try:
-                        events = day_data.get('events', [])
-                        if events and isinstance(events, list):
-                            for event in events:
-                                event_type = str(event.get('type', '')).lower()
-                                if 'hail' in event_type:
-                                    hail_size = event.get('value')
-                                    if hail_size:
-                                        max_hail_in = float(hail_size)
-                                        debug_info.append(f"✓ Hail found in events array: {max_hail_in}\"")
-                                        break
-                    except (ValueError, TypeError):
-                        pass
-                
-                # SECONDARY CHECK: Look for severe event alerts
-                alerts = data.get('alerts', [])
-                if alerts:
-                    for alert in alerts:
-                        alert_desc = str(alert.get('description', '')).lower()
-                        if 'hail' in alert_desc:
-                            citation_notes.append(f"National Weather Service Alert detected: Severe Hail Event")
-                            # Extract hail size from alert if possible
-                            if max_hail_in == 0:
-                                debug_info.append(f"⚠ NWS Alert mentions hail but no size data in API response")
-                        if 'wind' in alert_desc or 'tornado' in alert_desc:
-                            citation_notes.append(f"National Weather Service Alert detected: Severe Wind Event")
+                        event_year = int(parts[0])
+                        event_month = int(parts[1])
+                        event_day = int(parts[2])
+                        magnitude_str = parts[5]
+                        
+                        if event_year == year and event_month == month and event_day == day:
+                            hail_size = float(magnitude_str)
+                            if hail_size > 0:
+                                found_lsrs.append(hail_size)
+                                if hail_size > max_hail_in:
+                                    max_hail_in = hail_size
+                    except (ValueError, IndexError):
+                        continue
+                except Exception:
+                    continue
             
-            # Build citation based on what was found
-            if max_hail_in > 0:
-                citation_notes.insert(0, 
-                    f"Visual Crossing historical weather data verified {max_hail_in:.2f}\" hail diameter on {dol}."
-                )
+            if found_lsrs:
+                debug_info.append(f"✓ NOAA LSR: Found {len(found_lsrs)} hail report(s). Max: {max(found_lsrs)}\"")
+                sources_checked[-1] = "✓ NOAA LSR Database"
             else:
-                citation_notes.insert(0, 
-                    f"Visual Crossing weather scan for {dol}: Hail field returned zero or null. May indicate:"
-                )
-                citation_notes.append("• Historical hail records not in VC archive for this location/date")
-                citation_notes.append("• Ground spotter reports needed for verification")
-                
-            if max_wind_mph > 0:
-                citation_notes.append(f"Peak surface wind gust recorded: {max_wind_mph:.0f} mph")
-        
+                sources_checked[-1] = "✗ NOAA LSR (no records)"
         else:
-            citation_notes.append(f"Visual Crossing API error: HTTP {res.status_code}")
-            # Add response text for debugging
-            try:
-                error_msg = res.json().get('message', '')
-                if error_msg:
-                    citation_notes.append(f"Error detail: {error_msg}")
-            except:
-                pass
-
+            sources_checked[-1] = f"✗ NOAA LSR (HTTP {res.status_code})"
+    
     except Exception as e:
-        citation_notes.append(f"Weather query error: {str(e)}")
+        sources_checked[-1] = f"✗ NOAA LSR (error)"
 
-    # Formatted display labels for PDF and Streamlit UI
+    # ========== SOURCE 2: NWS Severe Weather Alerts ==========
+    if max_hail_in == 0:
+        try:
+            sources_checked.append("NWS Alerts")
+            nws_url = f"https://api.weather.gov/points/{lat},{lon}"
+            res = requests.get(nws_url, headers=GEOCODE_HEADERS, timeout=5.0)
+            
+            if res.status_code == 200:
+                point_data = res.json()
+                alerts_url = point_data.get('properties', {}).get('alerts')
+                
+                if alerts_url:
+                    alerts_res = requests.get(alerts_url, headers=GEOCODE_HEADERS, timeout=5.0)
+                    if alerts_res.status_code == 200:
+                        alerts = alerts_res.json().get('features', [])
+                        found_nws = False
+                        
+                        for alert in alerts:
+                            props = alert.get('properties', {})
+                            headline = str(props.get('headline', '')).lower()
+                            description = str(props.get('description', '')).lower()
+                            
+                            if 'hail' in headline or 'hail' in description:
+                                size_match = re.search(r'(\d+\.?\d*)\s*inch', description)
+                                if size_match:
+                                    hail_size = float(size_match.group(1))
+                                    if hail_size > max_hail_in:
+                                        max_hail_in = hail_size
+                                        debug_info.append(f"✓ NWS Alert: {props.get('event')} - {hail_size}\" hail")
+                                        found_nws = True
+                        
+                        if found_nws:
+                            sources_checked[-1] = "✓ NWS Alerts"
+                        else:
+                            sources_checked[-1] = "✗ NWS Alerts (no hail)"
+                else:
+                    sources_checked[-1] = "✗ NWS Alerts (unavailable)"
+            else:
+                sources_checked[-1] = f"✗ NWS Alerts (HTTP {res.status_code})"
+        except Exception as e:
+            sources_checked[-1] = "✗ NWS Alerts (error)"
+
+    # ========== SOURCE 3: SPC Storm Reports ==========
+    if max_hail_in == 0:
+        try:
+            from datetime import datetime as dt
+            dol_date = dt.strptime(dol, "%Y-%m-%d")
+            
+            sources_checked.append("SPC Reports")
+            spc_url = f"https://www.spc.noaa.gov/climo/reports/{dol_date.strftime('%y%m%d')}_hail.html"
+            res = requests.get(spc_url, headers=GEOCODE_HEADERS, timeout=5.0)
+            
+            if res.status_code == 200:
+                size_matches = re.findall(r'(\d+\.\d{2})\s+inch', res.text)
+                if size_matches:
+                    hail_sizes = [float(s) for s in size_matches]
+                    max_hail_in = max(hail_sizes)
+                    debug_info.append(f"✓ SPC Reports: Found {len(size_matches)} hail report(s). Max: {max_hail_in}\"")
+                    sources_checked[-1] = "✓ SPC Reports"
+                else:
+                    sources_checked[-1] = "✗ SPC Reports (no data)"
+            else:
+                sources_checked[-1] = f"✗ SPC Reports (HTTP {res.status_code})"
+        except Exception as e:
+            sources_checked[-1] = "✗ SPC Reports (error)"
+
+    # ========== SOURCE 4: Visual Crossing (Fallback) ==========
+    api_key = st.secrets.get("VISUAL_CROSSING_KEY", "")
+    
+    if api_key:
+        try:
+            sources_checked.append("Visual Crossing")
+            vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}"
+            params = {
+                'unitGroup': 'us',
+                'key': api_key,
+                'include': 'days,alerts,events',
+                'elements': 'preciptype,precip,hail,windgust,windspeed,severerisk'
+            }
+            
+            res = requests.get(vc_url, params=params, headers=GEOCODE_HEADERS, timeout=10.0)
+            
+            if res.status_code == 200:
+                data = res.json()
+                days = data.get('days', [])
+                found_vc = False
+                
+                if days:
+                    day_data = days[0]
+                    
+                    try:
+                        hail_value = day_data.get('hail')
+                        if hail_value is not None and hail_value != 0 and hail_value > max_hail_in:
+                            max_hail_in = float(hail_value)
+                            debug_info.append(f"✓ Visual Crossing 'hail' field: {max_hail_in}\"")
+                            found_vc = True
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    if not found_vc:
+                        try:
+                            precip_types = day_data.get('preciptype', [])
+                            if isinstance(precip_types, list) and 'hail' in precip_types:
+                                precip_amount = day_data.get('precip', 0)
+                                if precip_amount > 0.5 and max_hail_in == 0:
+                                    max_hail_in = 0.75
+                                    debug_info.append(f"✓ Visual Crossing preciptype detected hail (estimated 0.75\")")
+                                    found_vc = True
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Get wind from Visual Crossing
+                    try:
+                        windgust_value = day_data.get('windgust')
+                        if windgust_value is not None:
+                            max_wind_mph = float(windgust_value)
+                        else:
+                            windspeed_value = day_data.get('windspeed')
+                            if windspeed_value is not None:
+                                max_wind_mph = float(windspeed_value)
+                    except (ValueError, TypeError):
+                        max_wind_mph = 0.0
+                    
+                    if max_wind_mph > 0:
+                        debug_info.append(f"✓ Visual Crossing wind: {max_wind_mph:.0f} mph")
+                
+                if found_vc:
+                    sources_checked[-1] = "✓ Visual Crossing"
+                else:
+                    sources_checked[-1] = "✗ Visual Crossing (no hail)"
+            else:
+                sources_checked[-1] = f"✗ Visual Crossing (HTTP {res.status_code})"
+        except Exception as e:
+            sources_checked[-1] = "✗ Visual Crossing (error)"
+    else:
+        sources_checked.append("✗ Visual Crossing (no API key)")
+
+    # ========== BUILD FINAL CITATION ==========
+    if max_hail_in > 0:
+        citation_notes.append(f"✓ Multi-source verification: {max_hail_in:.2f}\" hail on {dol}")
+    else:
+        citation_notes.append(f"⚠ No hail data found in any source for {dol}")
+        citation_notes.append("Consider: (1) Manual field observation entry, (2) LSR may not be in database yet, (3) Check Hailstrike Go app")
+    
+    if max_wind_mph > 0:
+        citation_notes.append(f"Wind: {max_wind_mph:.0f} mph verified")
+    
+    citation_notes.append(f"Sources checked: {' | '.join(sources_checked)}")
+
+    # Formatted display labels
     if max_hail_in > 0:
         hail_display = f'{max_hail_in:.2f}" Hail Verified'
     else:
-        hail_display = "No Hail in Historical Data"
+        hail_display = "No Hail in Database"
         
     wind_display = f"{max_wind_mph:.0f} mph" if max_wind_mph > 0 else "Data Unavailable"
 
-    # Dynamic Radar Reflectivity Classification
+    # Dynamic Radar Classification
     if max_hail_in >= 1.75:
         dbz_display = "65+ dBZ (Golf Ball+ Hail Core)"
     elif max_hail_in >= 1.0:
@@ -472,7 +513,6 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
     else:
         dbz_display = "Standard/Unavailable"
 
-    # Add debug info to citation if hail was not found
     if max_hail_in == 0 and debug_info:
         citation_notes.extend(debug_info)
 
@@ -487,16 +527,15 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
         "raw_wind": max_wind_mph,
         "raw_hail": max_hail_in,
         "storm_timestamp": f"{dol} Historical Window",
-        "data_source_citation": "Visual Crossing Weather API",
+        "data_source_citation": "Multi-Source Aggregator (NOAA LSR → NWS → SPC → Visual Crossing)",
         "citation_details": " | ".join(citation_notes),
-        "debug_info": debug_info
+        "debug_info": debug_info,
+        "sources_checked": sources_checked
     }
 
-
 def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_date: str, property_address: str, dol: str, inspection_finding: str) -> str:
-    """Generates an adjuster-ready narrative combining physical field findings with meteorological context."""
+    """Generates adjuster-ready narrative combining physical field findings with meteorological context."""
     
-    # Physical Observation Narrative Clause
     if "Severe" in inspection_finding:
         obs_clause = "On-site physical roof inspection confirmed direct storm damage, including wind-creased/lifted shingles, displaced tab integrity, and/or mechanical impact marks to soft metals and elevated components."
     elif "Moderate" in inspection_finding:
@@ -506,7 +545,6 @@ def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_da
     else:
         obs_clause = "Pre-inspection meteorological analysis conducted to establish site exposure prior to physical on-site verification."
 
-    # Weather Correlation Clause
     weather_clause = (
         f"Historical meteorological archives for <b>{property_address}</b> on loss date <b>{dol}</b> "
         f"log peak recorded surface gusts of <b>{noaa_data.get('wind_gust_speed_mph', 'N/A')}</b> "
@@ -516,7 +554,7 @@ def generate_storm_risk_summary(noaa_data: Dict, report_type: str, inspection_da
     return f"<b>Field Observation:</b> {obs_clause}<br/><br/><b>Meteorological Context:</b> {weather_clause}"
 
 # ============================================================================
-# CORE: PDF GENERATION WITH REPORTLAB
+# PDF GENERATION
 # ============================================================================
 
 def generate_adjuster_pdf(
@@ -623,7 +661,7 @@ def generate_adjuster_pdf(
     story.append(metadata_table)
     story.append(Spacer(1, 0.2*inch))
    
-    noaa_title = Paragraph("NOAA & METEOROLOGICAL RADAR ANALYSIS", TITLE_STYLE)
+    noaa_title = Paragraph("METEOROLOGICAL ANALYSIS (Multi-Source Aggregated)", TITLE_STYLE)
     story.append(noaa_title)
    
     noaa_data_table_data = [
@@ -632,7 +670,7 @@ def generate_adjuster_pdf(
         ["Peak Surface Wind Gust", f"{noaa_data.get('wind_gust_speed_mph', 'N/A')}"],
         ["Radar Reflectivity Classification", f"{noaa_data.get('radar_reflectivity_dbz', 'N/A')}"],
         ["Observation Window", noaa_data.get('storm_timestamp', 'N/A')],
-        ["Primary Data Sources", noaa_data.get('data_source_citation', 'Visual Crossing Weather API')],
+        ["Data Sources", noaa_data.get('data_source_citation', 'Multi-Source')],
     ]
    
     noaa_table = Table(noaa_data_table_data, colWidths=[2.5*inch, 4*inch])
@@ -651,7 +689,7 @@ def generate_adjuster_pdf(
    
     story.append(noaa_table)
     story.append(Spacer(1, 0.05*inch))
-    story.append(Paragraph(f"*<i>Citation Footnote: {noaa_data.get('citation_details', '')}</i>", FOOTNOTE_STYLE))
+    story.append(Paragraph(f"*<i>Citation: {noaa_data.get('citation_details', '')}</i>", FOOTNOTE_STYLE))
     story.append(Spacer(1, 0.15*inch))
    
     risk_title = Paragraph("STORM IMPACT ASSESSMENT & FIELD SUMMARY", TITLE_STYLE)
@@ -749,7 +787,7 @@ def generate_adjuster_pdf(
     return pdf_buffer.getvalue()
 
 # ============================================================================
-# STREAMLIT UI WITH DARK SLATE SIDEBAR & GOLD BRANDING
+# STREAMLIT UI
 # ============================================================================
 
 def apply_belmont_branding():
@@ -928,7 +966,7 @@ def main():
    
     apply_belmont_branding()
 
-    # HEADER LOGO & TITLE
+    # HEADER
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
     
@@ -947,13 +985,13 @@ def main():
             """
             <div class="belmont-header">
                 <div class="belmont-title">Field Inspection & Adjuster Claims Portal</div>
-                <div class="belmont-subtitle">Belmont Construction | Adjuster-Grade Evidence & Radar Reporting</div>
+                <div class="belmont-subtitle">Belmont Construction | Multi-Source Hail Aggregator & Evidence Repository</div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
-    # INITIALIZE SESSION STATE FOR PERSISTENT DATA
+    # SESSION STATE
     if 'photo_data' not in ss:
         ss.photo_data = {cat: [] for cat in PHOTO_CATEGORIES.keys()}
     if 'geocoded_data' not in ss:
@@ -961,7 +999,7 @@ def main():
     if 'raw_address_input' not in ss:
         ss.raw_address_input = ""
 
-    # SIDEBAR INPUTS
+    # SIDEBAR
     with st.sidebar:
         st.markdown("### 📋 Inspection Metadata")
        
@@ -972,7 +1010,6 @@ def main():
         st.divider()
         st.markdown("### 📍 Property Details")
         
-        # 1. TEXT INPUT FOR ADDRESS OR ZIP CODE
         property_address = st.text_input(
             "Property Address or Zip Code", 
             value=ss.raw_address_input,
@@ -980,7 +1017,6 @@ def main():
         )
         ss.raw_address_input = property_address
 
-        # 2. ISOLATED BUTTON FOR MULTI-ENGINE GEOCODING
         if st.button("📍 Lock GPS & Verify Coordinates", type="primary", use_container_width=True):
             if property_address and len(property_address.strip()) >= 3:
                 with st.spinner("Geocoding across GIS engines & locking coordinates..."):
@@ -1023,10 +1059,10 @@ def main():
         st.divider()
         st.caption("🔒 **Internal Tool:** Photos compress automatically to optimize layout rendering.")
 
-    # MAIN NAVIGATION TABS
+    # MAIN TABS
     tab_report, tab_claims = st.tabs(["📋 Storm Inspection Report", "📞 Call in Claims"])
 
-    # TAB 1: STORM INSPECTION REPORT & PDF GENERATOR
+    # TAB 1
     with tab_report:
         st.markdown('<div class="section-header">📷 Field Photo Documentation</div>', unsafe_allow_html=True)
        
@@ -1060,7 +1096,7 @@ def main():
                 if not uploaded_files and ss.photo_data[category_name]:
                     ss.photo_data[category_name] = []
 
-        # PHYSICAL OBSERVATION SELECTOR
+        # OBSERVATION SELECTOR
         st.markdown('<div class="section-header">🔍 Field Observation (Quick Selection)</div>', unsafe_allow_html=True)
         inspection_finding = st.segmented_control(
             "Select Physical Inspection Finding:",
@@ -1068,20 +1104,20 @@ def main():
             default="🔴 Severe Damage"
         )
 
-        st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">📊 Meteorological Verification (Multi-Source)</div>', unsafe_allow_html=True)
        
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            fetch_noaa = st.checkbox("Include Radar & Weather Verification", value=True)
+            fetch_noaa = st.checkbox("Include Multi-Source Weather Verification", value=True)
         with col2:
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
         with col3:
-            st.caption("")  # Spacer
+            st.caption("")
         
-        # MANUAL HAIL SIZE OVERRIDE
+        # MANUAL OVERRIDE
         manual_hail_override = None
         with st.expander("📝 **Manual Weather Override** (if API data missing)"):
-            st.caption("Use this only if you observed hail damage but the API returned no hail data.")
+            st.caption("Use this only if you observed hail damage but the aggregator returned no hail data.")
             override_hail = st.number_input(
                 "Enter hail size (inches) if known from field observation:",
                 min_value=0.0,
@@ -1102,12 +1138,11 @@ def main():
 
                 noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown", max_radius_miles=30.0)
                 
-                # APPLY MANUAL OVERRIDE IF API RETURNED ZERO HAIL BUT USER INPUT HAIL SIZE
+                # APPLY MANUAL OVERRIDE
                 if manual_hail_override and manual_hail_override > 0:
                     if noaa_data.get('raw_hail', 0) == 0:
                         noaa_data['raw_hail'] = manual_hail_override
                         noaa_data['peak_hail_size_inches'] = f'{manual_hail_override:.2f}" (Field Observed)'
-                        # Update reflectivity display based on manual hail size
                         if manual_hail_override >= 1.75:
                             noaa_data['radar_reflectivity_dbz'] = "65+ dBZ (Golf Ball+ Hail Core)"
                         elif manual_hail_override >= 1.0:
@@ -1116,7 +1151,7 @@ def main():
                             noaa_data['radar_reflectivity_dbz'] = "50-55 dBZ (Sub-Severe Hail)"
                         noaa_data['citation_details'] = f"Field-observed hail size: {manual_hail_override}\". API historical data unavailable for this location/date."
                
-                # GPS Verification Card
+                # GPS CARD
                 st.markdown(
                     f"""
                     <div class="gps-verification-box">
@@ -1138,15 +1173,36 @@ def main():
                 with m3:
                     st.metric("Radar Reflectivity", noaa_data["radar_reflectivity_dbz"])
 
-                # DEBUG PANEL: Show what the API is returning
-                if noaa_data.get("raw_hail", 0) == 0 and noaa_data.get("raw_wind", 0) > 0:
-                    with st.expander("🔧 **Debug Info** — API Response Analysis"):
-                        st.warning("⚠️ **Wind detected but no hail data.** Visual Crossing may not have hail records for this date/location.")
+                # DEBUG PANEL
+                if noaa_data.get("raw_hail", 0) == 0:
+                    with st.expander("🔧 **Multi-Source Search Details**"):
+                        st.warning("⚠️ No hail found in available databases")
+                        
+                        if noaa_data.get("sources_checked"):
+                            st.subheader("Sources Queried:")
+                            for source in noaa_data["sources_checked"]:
+                                st.caption(source)
+                        
                         if noaa_data.get("debug_info"):
+                            st.subheader("Search Logs:")
                             for debug_line in noaa_data["debug_info"]:
                                 st.code(debug_line, language=None)
+                        
+                        st.info("💡 **Suggestion:** Check Hailstrike Go on your phone for LSR data. If you see reports there, use the Manual Override above to enter the observed hail size.")
+                
+                elif noaa_data.get("raw_hail", 0) > 0:
+                    with st.expander("✅ **Multi-Source Verification** — Data Found"):
+                        st.success(f"Hail verified: {noaa_data['raw_hail']:.2f}\"")
+                        if noaa_data.get("sources_checked"):
+                            st.subheader("Sources That Returned Data:")
+                            for source in noaa_data["sources_checked"]:
+                                if "✓" in source:
+                                    st.caption(source)
+                        if noaa_data.get("debug_info"):
+                            for debug_line in noaa_data["debug_info"]:
+                                st.caption(debug_line)
 
-                # Generated Narrative Preview
+                # NARRATIVE
                 narrative_preview = generate_storm_risk_summary(
                     noaa_data=noaa_data,
                     report_type=report_type,
@@ -1160,7 +1216,7 @@ def main():
 
             else:
                 noaa_data = None
-                st.warning("⚠️ **GPS Coordinates Not Locked:** Please enter an address/zip in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch weather radar metrics.")
+                st.warning("⚠️ **GPS Coordinates Not Locked:** Please enter an address/zip in the sidebar and click **'📍 Lock GPS & Verify Coordinates'** to fetch multi-source weather data.")
         else:
             noaa_data = None
        
@@ -1209,7 +1265,7 @@ def main():
                         st.error(f"❌ PDF Compilation Error: {str(e)}")
                         st.exception(e)
 
-    # TAB 2: CALL IN CLAIMS DASHBOARD
+    # TAB 2
     with tab_claims:
         st.markdown('<div class="section-header">📞 Direct Claims Filing Hotlines</div>', unsafe_allow_html=True)
         st.caption("Tap any carrier button below to directly launch your phone dialer for First Notice of Loss (FNOL).")
@@ -1228,7 +1284,7 @@ def main():
                     st.markdown(btn_html, unsafe_allow_html=True)
 
     st.divider()
-    st.caption("© Belmont Construction | Field Representative Claim System | Confidential & Proprietary")
+    st.caption("© Belmont Construction | Field Representative Claim System | Multi-Source Hail Aggregator | Confidential & Proprietary")
 
 
 if __name__ == "__main__":
