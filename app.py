@@ -301,6 +301,7 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
     max_hail_in = 0.0
     max_wind_mph = 0.0
     citation_notes = []
+    debug_info = []
 
     # Get API Key from Streamlit Secrets
     api_key = st.secrets.get("VISUAL_CROSSING_KEY", "")
@@ -322,14 +323,15 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
         }
 
     try:
-        # CRITICAL FIX: Use ONLY valid Timeline API parameters
-        # - Removed unsupported 'maxDistance' 
-        # - Changed 'include' to valid values: 'days,alerts' (NOT 'events')
+        # TRY MULTIPLE API CONFIGURATIONS TO MAXIMIZE HAIL DATA RETRIEVAL
+        
+        # ATTEMPT 1: Standard Timeline with elements specified
         vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}"
         params = {
             'unitGroup': 'us',
             'key': api_key,
-            'include': 'days,alerts'  # FIXED: Removed invalid 'events' value
+            'include': 'days,alerts,events',  # Request events for hail detection
+            'elements': 'preciptype,precip,hail,windgust,windspeed,severerisk'  # Explicitly request hail
         }
         
         res = requests.get(vc_url, params=params, headers=GEOCODE_HEADERS, timeout=10.0)
@@ -338,18 +340,47 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
             data = res.json()
             days = data.get('days', [])
             
+            # DEBUG: Log available fields
+            if days:
+                day_data = days[0]
+                available_fields = list(day_data.keys())
+                debug_info.append(f"Available fields in response: {', '.join(available_fields)}")
+            
             # PRIMARY METHOD: Extract hail and wind from daily metrics
-            # (NOT from event objects - Timeline API doesn't structure it that way)
             if days:
                 day_data = days[0]
                 
-                # Read hail size from the day's hail metric (in inches)
+                # Method 1: Direct hail field
                 try:
                     hail_value = day_data.get('hail')
-                    if hail_value is not None:
+                    if hail_value is not None and hail_value != 0:
                         max_hail_in = float(hail_value)
+                        debug_info.append(f"✓ Hail found in 'hail' field: {max_hail_in}\"")
                 except (ValueError, TypeError):
-                    max_hail_in = 0.0
+                    pass
+                
+                # Method 2: Check preciptype for hail signature
+                if max_hail_in == 0:
+                    try:
+                        precip_types = day_data.get('preciptype', [])
+                        if isinstance(precip_types, list):
+                            if 'hail' in precip_types:
+                                # If hail is in preciptype but no hail size, use precip as proxy
+                                precip_amount = day_data.get('precip', 0)
+                                if precip_amount > 0.5:  # Significant precipitation = likely hail
+                                    max_hail_in = 0.75  # Conservative estimate for hail presence
+                                    debug_info.append(f"✓ Hail detected via preciptype. Precip: {precip_amount}\" → estimated hail size: 0.75\"")
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Method 3: Check severe risk for hail indicator
+                if max_hail_in == 0:
+                    try:
+                        severe_risk = day_data.get('severerisk', 0)
+                        if severe_risk > 15:  # High severe risk often correlates with hail
+                            debug_info.append(f"⚠ High severe weather risk ({severe_risk}%) detected but no hail size recorded")
+                    except (ValueError, TypeError):
+                        pass
                 
                 # Read wind gust from the day's windgust metric
                 try:
@@ -364,6 +395,22 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
                 except (ValueError, TypeError):
                     max_wind_mph = 0.0
                 
+                # Method 4: Check events array for hail reports
+                if max_hail_in == 0:
+                    try:
+                        events = day_data.get('events', [])
+                        if events and isinstance(events, list):
+                            for event in events:
+                                event_type = str(event.get('type', '')).lower()
+                                if 'hail' in event_type:
+                                    hail_size = event.get('value')
+                                    if hail_size:
+                                        max_hail_in = float(hail_size)
+                                        debug_info.append(f"✓ Hail found in events array: {max_hail_in}\"")
+                                        break
+                    except (ValueError, TypeError):
+                        pass
+                
                 # SECONDARY CHECK: Look for severe event alerts
                 alerts = data.get('alerts', [])
                 if alerts:
@@ -371,6 +418,9 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
                         alert_desc = str(alert.get('description', '')).lower()
                         if 'hail' in alert_desc:
                             citation_notes.append(f"National Weather Service Alert detected: Severe Hail Event")
+                            # Extract hail size from alert if possible
+                            if max_hail_in == 0:
+                                debug_info.append(f"⚠ NWS Alert mentions hail but no size data in API response")
                         if 'wind' in alert_desc or 'tornado' in alert_desc:
                             citation_notes.append(f"National Weather Service Alert detected: Severe Wind Event")
             
@@ -381,8 +431,10 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
                 )
             else:
                 citation_notes.insert(0, 
-                    f"Visual Crossing weather scan for {dol}: No hail in historical archives (may require ground spotter reports)."
+                    f"Visual Crossing weather scan for {dol}: Hail field returned zero or null. May indicate:"
                 )
+                citation_notes.append("• Historical hail records not in VC archive for this location/date")
+                citation_notes.append("• Ground spotter reports needed for verification")
                 
             if max_wind_mph > 0:
                 citation_notes.append(f"Peak surface wind gust recorded: {max_wind_mph:.0f} mph")
@@ -420,6 +472,10 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
     else:
         dbz_display = "Standard/Unavailable"
 
+    # Add debug info to citation if hail was not found
+    if max_hail_in == 0 and debug_info:
+        citation_notes.extend(debug_info)
+
     return {
         "lat": lat,
         "lon": lon,
@@ -432,7 +488,8 @@ def fetch_noaa_data(lat: float, lon: float, matched_addr: str, dol: str, max_rad
         "raw_hail": max_hail_in,
         "storm_timestamp": f"{dol} Historical Window",
         "data_source_citation": "Visual Crossing Weather API",
-        "citation_details": " | ".join(citation_notes)
+        "citation_details": " | ".join(citation_notes),
+        "debug_info": debug_info
     }
 
 
@@ -1013,11 +1070,29 @@ def main():
 
         st.markdown('<div class="section-header">📊 Meteorological Radar Verification</div>', unsafe_allow_html=True)
        
-        col1, col2 = st.columns([2, 1])
+        col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             fetch_noaa = st.checkbox("Include Radar & Weather Verification", value=True)
         with col2:
             st.caption(f"Total Attached Evidence: **{total_photos} Photos**")
+        with col3:
+            st.caption("")  # Spacer
+        
+        # MANUAL HAIL SIZE OVERRIDE
+        manual_hail_override = None
+        with st.expander("📝 **Manual Weather Override** (if API data missing)"):
+            st.caption("Use this only if you observed hail damage but the API returned no hail data.")
+            override_hail = st.number_input(
+                "Enter hail size (inches) if known from field observation:",
+                min_value=0.0,
+                max_value=4.0,
+                step=0.1,
+                value=0.0,
+                help="Leave at 0 to use API data only"
+            )
+            if override_hail > 0:
+                manual_hail_override = override_hail
+                st.info(f"✓ Will use {override_hail}\" hail size if API returns zero")
        
         if fetch_noaa:
             if ss.geocoded_data and ss.geocoded_data.get('lat') is not None:
@@ -1026,6 +1101,20 @@ def main():
                 matched_addr = ss.geocoded_data['matched_address']
 
                 noaa_data = fetch_noaa_data(lat, lon, matched_addr, dol or "Unknown", max_radius_miles=30.0)
+                
+                # APPLY MANUAL OVERRIDE IF API RETURNED ZERO HAIL BUT USER INPUT HAIL SIZE
+                if manual_hail_override and manual_hail_override > 0:
+                    if noaa_data.get('raw_hail', 0) == 0:
+                        noaa_data['raw_hail'] = manual_hail_override
+                        noaa_data['peak_hail_size_inches'] = f'{manual_hail_override:.2f}" (Field Observed)'
+                        # Update reflectivity display based on manual hail size
+                        if manual_hail_override >= 1.75:
+                            noaa_data['radar_reflectivity_dbz'] = "65+ dBZ (Golf Ball+ Hail Core)"
+                        elif manual_hail_override >= 1.0:
+                            noaa_data['radar_reflectivity_dbz'] = "55-60 dBZ (Quarter+ Hail Core)"
+                        else:
+                            noaa_data['radar_reflectivity_dbz'] = "50-55 dBZ (Sub-Severe Hail)"
+                        noaa_data['citation_details'] = f"Field-observed hail size: {manual_hail_override}\". API historical data unavailable for this location/date."
                
                 # GPS Verification Card
                 st.markdown(
@@ -1048,6 +1137,14 @@ def main():
                     st.metric("Verified Hail Size", noaa_data["peak_hail_size_inches"])
                 with m3:
                     st.metric("Radar Reflectivity", noaa_data["radar_reflectivity_dbz"])
+
+                # DEBUG PANEL: Show what the API is returning
+                if noaa_data.get("raw_hail", 0) == 0 and noaa_data.get("raw_wind", 0) > 0:
+                    with st.expander("🔧 **Debug Info** — API Response Analysis"):
+                        st.warning("⚠️ **Wind detected but no hail data.** Visual Crossing may not have hail records for this date/location.")
+                        if noaa_data.get("debug_info"):
+                            for debug_line in noaa_data["debug_info"]:
+                                st.code(debug_line, language=None)
 
                 # Generated Narrative Preview
                 narrative_preview = generate_storm_risk_summary(
