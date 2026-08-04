@@ -454,7 +454,24 @@ def generate_adjuster_pdf(
 def apply_branding():
     st.markdown("""
         <style>
-        .main .block-container { padding-top: 1.5rem; max-width: 1100px; }
+        .main .block-container { padding-top: 1rem; max-width: 1100px; }
+        
+        /* Logo Styles */
+        img[alt="Belmont Logo"] {
+            max-width: 150px !important;
+            height: auto !important;
+            margin: 0 auto !important;
+            display: block !important;
+        }
+        
+        /* Mobile adjustments */
+        @media (max-width: 640px) {
+            img[alt="Belmont Logo"] {
+                max-width: 120px !important;
+            }
+            .main .block-container { padding-top: 0.5rem; }
+        }
+        
         [data-testid="stSidebar"] { background-color: #1E293B !important; }
         [data-testid="stSidebar"] h3, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stMarkdown p {
             color: #D4AF37 !important; font-weight: 600 !important;
@@ -481,7 +498,19 @@ def main():
     st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
     apply_branding()
 
-    # HEADER
+    # LOGO & HEADER
+    logo_path = os.path.abspath("BELMONT_LOGO.png")
+    logo_base64 = get_image_base64(logo_path)
+    
+    if logo_base64:
+        st.markdown(f"""
+            <div style="text-align: center; margin-bottom: 20px;">
+                <img src="{logo_base64}" alt="Belmont Logo" style="max-width: 150px; height: auto; display: block; margin: 0 auto;">
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("<h2 style='text-align: center; margin-top: 0;'>🏢 BELMONT</h2>", unsafe_allow_html=True)
+    
     st.markdown("""
         <div style="background-color: #FAF8F5; border-left: 6px solid #D4AF37; padding: 18px 24px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
             <div style="color: #1E293B; font-size: 26px; font-weight: 700; margin: 0;">Field Inspection & Adjuster Claims Portal</div>
