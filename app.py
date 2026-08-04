@@ -217,63 +217,10 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
 # WEATHER ENGINE: WIND DATA ONLY
 # ============================================================================
 
-def fetch_wind_data(lat: float, lon: float, dol: str) -> Dict:
-    """Fetch wind data from NWS + Visual Crossing"""
-    max_wind_mph = 0.0
-    sources = []
 
-    # Try NWS
-    try:
-        res = requests.get(f"https://api.weather.gov/points/{lat},{lon}", headers=GEOCODE_HEADERS, timeout=5.0)
-        if res.status_code == 200:
-            grid_data = res.json()
-            alerts_url = grid_data.get('properties', {}).get('alerts')
-            if alerts_url:
-                alerts_res = requests.get(alerts_url, headers=GEOCODE_HEADERS, timeout=5.0)
-                if alerts_res.status_code == 200:
-                    for alert in alerts_res.json().get('features', []):
-                        desc = str(alert.get('properties', {}).get('description', '')).lower()
-                        # Extract wind speed if mentioned
-                        match = re.search(r'(\d+)\s+mph', desc)
-                        if match:
-                            wind_speed = int(match.group(1))
-                            if wind_speed > max_wind_mph:
-                                max_wind_mph = wind_speed
-            if max_wind_mph > 0:
-                sources.append("✓ NWS Alerts")
-    except:
-        pass
 
-    # Try Visual Crossing as fallback
-    api_key = st.secrets.get("VISUAL_CROSSING_KEY", "")
-    if api_key and max_wind_mph == 0:
-        try:
-            res = requests.get(
-                f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}/{dol}/{dol}",
-                params={'unitGroup': 'us', 'key': api_key, 'include': 'days'},
-                headers=GEOCODE_HEADERS, timeout=10.0
-            )
-            if res.status_code == 200:
-                days = res.json().get('days', [])
-                if days:
-                    day = days[0]
-                    wind = float(day.get('windgust') or day.get('windspeed') or 0)
-                    if wind > 0:
-                        max_wind_mph = wind
-                        sources.append("✓ Visual Crossing")
-        except:
-            pass
-
-    wind_display = f"{max_wind_mph:.0f} mph" if max_wind_mph > 0 else "No data"
-    
-    return {
-        "wind_mph": max_wind_mph,
-        "wind_display": wind_display,
-        "sources": sources if sources else ["No wind data found"]
-    }
-
-def generate_narrative(property_address: str, dol: str, inspection_finding: str, hail_size: float, wind_mph: float) -> str:
-    """Generate inspection narrative"""
+def generate_narrative(property_address: str, dol: str, inspection_finding: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
+    """Generate inspection narrative with damage description"""
     if "Severe" in inspection_finding:
         obs = "On-site physical roof inspection confirmed direct storm damage, including wind-creased/lifted shingles, displaced tab integrity, and/or mechanical impact marks to soft metals and elevated components."
     elif "Moderate" in inspection_finding:
@@ -286,7 +233,12 @@ def generate_narrative(property_address: str, dol: str, inspection_finding: str,
     hail_text = f"{hail_size:.2f}\" hail" if hail_size > 0 else "no recorded hail"
     wind_text = f"{wind_mph:.0f} mph winds" if wind_mph > 0 else "no recorded wind"
     
-    return f"<b>Field Observation:</b> {obs}<br/><br/><b>Meteorological Context:</b> Property at <b>{property_address}</b> on <b>{dol}</b> experienced {wind_text} and {hail_text}."
+    narrative = f"<b>Field Observation:</b> {obs}<br/><br/><b>Meteorological Context:</b> Property at <b>{property_address}</b> on <b>{dol}</b> experienced {wind_text} and {hail_text}."
+    
+    if damage_notes and wind_mph > 0:
+        narrative += f"<br/><br/><b>Storm Reports (Hailstrike Go):</b> {damage_notes}"
+    
+    return narrative
 
 # ============================================================================
 # PDF GENERATION
@@ -298,6 +250,7 @@ def generate_adjuster_pdf(
     report_type: str, local_office: str, inspection_finding: str,
     hail_size: float, wind_mph: float, wind_sources: list,
     photo_categories_data: Dict[str, List[Dict]],
+    damage_notes: str = "",
     logo_path: str = "BELMONT_LOGO.png"
 ) -> bytes:
     
@@ -326,7 +279,8 @@ def generate_adjuster_pdf(
     left_data = [
         [header_img] if header_img else [],
         [Paragraph(f"<b>{COMPANY_NAME}</b>", NORMAL_STYLE)],
-        [Paragraph(f"HQ: {COMPANY_HQ} | {local_office}", NORMAL_STYLE)],
+        [Paragraph(f"HQ: {COMPANY_HQ}", NORMAL_STYLE)],
+        [Paragraph(f"Local Office: {local_office}", NORMAL_STYLE)],
     ]
     
     right_data = [
@@ -396,7 +350,7 @@ def generate_adjuster_pdf(
     
     # NARRATIVE
     story.append(Paragraph("ASSESSMENT", TITLE_STYLE))
-    narrative = generate_narrative(property_address, dol, inspection_finding, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0)
+    narrative = generate_narrative(property_address, dol, inspection_finding, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0, damage_notes)
     story.append(Paragraph(narrative, NORMAL_STYLE))
     story.append(PageBreak())
     
@@ -432,7 +386,12 @@ def generate_adjuster_pdf(
     # APPENDIX
     if all_photos:
         story.append(PageBreak())
-        story.append(Paragraph("APPENDIX: High-Resolution Photos", APPENDIX_TITLE_STYLE))
+        story.append(Paragraph("APPENDIX: High-Resolution Photo Evidence", APPENDIX_TITLE_STYLE))
+        story.append(Spacer(1, 0.1*inch))
+        story.append(Paragraph(
+            "This appendix contains high-resolution photographs from the on-site inspection. Each image is embedded in full resolution to enable detailed adjuster examination, precise damage assessment, and professional documentation of storm-related losses. These photos serve as the primary visual evidence supporting this inspection report and the estimated repair scope.",
+            APPENDIX_CAPTION_STYLE
+        ))
         story.append(Spacer(1, 0.15*inch))
         
         for photo in all_photos:
@@ -514,7 +473,7 @@ def main():
     st.markdown("""
         <div style="background-color: #FAF8F5; border-left: 6px solid #D4AF37; padding: 18px 24px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
             <div style="color: #1E293B; font-size: 26px; font-weight: 700; margin: 0;">Field Inspection & Adjuster Claims Portal</div>
-            <div style="color: #D4AF37; font-size: 15px; font-weight: 600; margin-top: 4px;">Belmont Construction | Wind-Tracked Hail-Reported</div>
+            <div style="color: #D4AF37; font-size: 15px; font-weight: 600; margin-top: 4px;">Belmont Construction | Hailstrike Go-Reported | Rep-Estimated Wind</div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -588,45 +547,71 @@ def main():
         st.markdown('<div class="section-header">🔍 Field Observation</div>', unsafe_allow_html=True)
         inspection_finding = st.segmented_control("Select Finding:", options=["🔴 Severe Damage", "🟡 Moderate Damage", "🟢 Normal Wear", "🔍 Pre-Inspection Only"], default="🔴 Severe Damage")
 
-        st.markdown('<div class="section-header">⛈️ Storm Data</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">⛈️ Storm Data (from Hailstrike Go)</div>', unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            fetch_wind = st.checkbox("Fetch Wind Data", value=True)
-        with col2:
-            st.caption(f"**{total_photos} Photos**")
-        with col3:
-            pass
+        st.caption(f"📸 **{total_photos} Photos Attached**")
+        
+        # LOCATION INFO
+        if ss.geocoded_data and ss.geocoded_data.get('lat'):
+            st.markdown(f"""
+                <div class="gps-box">
+                    <h4>📍 Location</h4>
+                    <p><b>Address:</b> {ss.geocoded_data['matched']}</p>
+                    <p><b>Coordinates:</b> {ss.geocoded_data['lat']:.4f}, {ss.geocoded_data['lon']:.4f}</p>
+                    <a href="https://www.google.com/maps?q={ss.geocoded_data['lat']},{ss.geocoded_data['lon']}" target="_blank" class="maps-btn">View on Maps</a>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.warning("⚠️ Lock GPS coordinates in sidebar first")
 
-        # HAIL ENTRY (Primary)
-        st.markdown("### 🌧️ Hail Size (from Hailstrike Go)")
-        hail_size = st.number_input("Enter hail size observed (inches):", min_value=0.0, max_value=4.0, step=0.1, value=0.0, help="Open Hailstrike Go, filter to DOL, find max hail size, enter here")
-        if hail_size > 0:
-            st.info(f"✓ Hail size: {hail_size}\"")
-
-        # WIND DATA (Automated)
-        wind_data = None
-        if fetch_wind:
-            if ss.geocoded_data and ss.geocoded_data.get('lat'):
-                with st.spinner("Fetching wind data..."):
-                    wind_data = fetch_wind_data(ss.geocoded_data['lat'], ss.geocoded_data['lon'], dol)
-                
-                st.markdown(f"""
-                    <div class="gps-box">
-                        <h4>📍 Location Locked</h4>
-                        <p><b>Address:</b> {ss.geocoded_data['matched']}</p>
-                        <p><b>Coordinates:</b> {ss.geocoded_data['lat']:.4f}, {ss.geocoded_data['lon']:.4f}</p>
-                        <a href="https://www.google.com/maps?q={ss.geocoded_data['lat']},{ss.geocoded_data['lon']}" target="_blank" class="maps-btn">View on Maps</a>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                if wind_data['wind_mph'] > 0:
-                    st.success(f"✅ Wind: {wind_data['wind_display']}")
-                else:
-                    st.info("Wind: No automated data found")
-            else:
-                st.warning("⚠️ Lock GPS coordinates to fetch wind data")
-                wind_data = None
+        # HAIL & WIND MANUAL ENTRY
+        st.markdown("### 🌧️ Storm Measurements")
+        
+        col_hail, col_wind = st.columns(2)
+        
+        with col_hail:
+            st.markdown("**Hail Size**")
+            hail_size = st.number_input(
+                "Hail (inches)", min_value=0.0, max_value=4.0, step=0.1, value=0.0,
+                key="hail_input", help="Open Hailstrike Go → filter to DOL → find max hail"
+            )
+            if hail_size > 0:
+                st.success(f"✓ {hail_size}\"")
+        
+        with col_wind:
+            st.markdown("**Wind Speed**")
+            wind_speed = st.number_input(
+                "Wind (mph)", min_value=0.0, max_value=150.0, step=5.0, value=0.0,
+                key="wind_input", help="Use damage description below + reference guide"
+            )
+            if wind_speed > 0:
+                st.success(f"✓ {wind_speed:.0f} mph")
+        
+        # Damage Description
+        st.markdown("### 📋 Damage Description (from Hailstrike Go LSRs)")
+        damage_notes = st.text_area(
+            "Describe storm damage seen in Hailstrike Go reports:",
+            placeholder="e.g., 'Multiple large tree limbs (4-5\" diameter) snapped. 3 injuries reported. Structural damage to homes.'",
+            height=80,
+            help="Copy/summarize the damage descriptions from Hailstrike Go LSRs. This goes in the PDF to show your reasoning."
+        )
+        
+        # Wind damage reference guide
+        with st.expander("📖 Wind Speed Damage Reference"):
+            st.markdown("""
+            **Use Hailstrike Go LSR damage descriptions to estimate wind speed:**
+            
+            - **30-40 mph** — Light branches down, minor roof damage
+            - **40-50 mph** — Small tree limbs snapped, shingles lifted  
+            - **50-60 mph** — Large tree limbs (4-5") down, structural damage, fences damaged
+            - **60-75 mph** — Trees snapped/uprooted, severe home damage, injuries possible
+            - **75+ mph** — Widespread destruction, major structural failure
+            
+            **Examples:**
+            - LSR: "tree limb down" → Estimate: **55 mph**
+            - LSR: "trees uprooted" → Estimate: **70 mph**
+            - LSR: "structural damage, injuries" → Estimate: **65+ mph**
+            """)
 
         st.divider()
 
@@ -635,35 +620,40 @@ def main():
                 st.error("❌ Complete all required fields in sidebar")
             elif total_photos == 0:
                 st.error("❌ Upload at least one photo")
-            elif hail_size == 0:
-                st.warning("⚠️ No hail size entered. Wind-only report will be generated.")
+            elif hail_size == 0 and wind_speed == 0:
+                st.error("❌ Enter hail size or wind speed")
+            elif wind_speed > 0 and not damage_notes.strip():
+                st.warning("⚠️ Wind speed entered but no damage description. Add damage notes from Hailstrike Go.")
             
-            if inspector_name and property_address and customer_name and total_photos > 0:
-                with st.spinner("Generating PDF..."):
-                    try:
-                        filtered_photos = {k: v for k, v in ss.photo_data.items() if v}
-                        wind_sources = wind_data['sources'] if wind_data else ["Manual Entry"]
-                        wind_display = wind_data['wind_display'] if wind_data else "No data"
-                        
-                        pdf_bytes = generate_adjuster_pdf(
-                            inspector_name, inspector_phone, inspector_email,
-                            property_address, customer_name, dol,
-                            inspection_date_val.strftime("%Y-%m-%d"),
-                            report_type, local_office, inspection_finding,
-                            hail_size, wind_data['wind_mph'] if wind_data else 0, wind_sources,
-                            filtered_photos
-                        )
-                        
-                        st.download_button(
-                            label=f"📥 Download PDF ({len(pdf_bytes) / (1024*1024):.1f} MB)",
-                            data=pdf_bytes,
-                            file_name=f"Belmont_Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                            mime="application/pdf",
-                            use_container_width=True
-                        )
-                        st.success("✅ Report ready!")
-                    except Exception as e:
-                        st.error(f"❌ Error: {e}")
+            if inspector_name and property_address and customer_name and total_photos > 0 and (hail_size > 0 or wind_speed > 0):
+                # Only allow PDF if wind has damage notes
+                if wind_speed > 0 and not damage_notes.strip():
+                    st.error("❌ Please add damage description to support wind speed estimate")
+                else:
+                    with st.spinner("Generating PDF..."):
+                        try:
+                            filtered_photos = {k: v for k, v in ss.photo_data.items() if v}
+                            wind_sources = [f"Manual Entry (Hailstrike Go: {damage_notes[:50]}...)" if damage_notes else "Manual Entry"]
+                            
+                            pdf_bytes = generate_adjuster_pdf(
+                                inspector_name, inspector_phone, inspector_email,
+                                property_address, customer_name, dol,
+                                inspection_date_val.strftime("%Y-%m-%d"),
+                                report_type, local_office, inspection_finding,
+                                hail_size, wind_speed, wind_sources,
+                                filtered_photos, damage_notes
+                            )
+                            
+                            st.download_button(
+                                label=f"📥 Download PDF ({len(pdf_bytes) / (1024*1024):.1f} MB)",
+                                data=pdf_bytes,
+                                file_name=f"Belmont_Inspection_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                                mime="application/pdf",
+                                use_container_width=True
+                            )
+                            st.success("✅ Report ready!")
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
 
     with tab_claims:
         st.markdown('<div class="section-header">📞 Direct Claims Hotlines</div>', unsafe_allow_html=True)
