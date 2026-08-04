@@ -474,7 +474,7 @@ def apply_branding():
     """, unsafe_allow_html=True)
 
 def main():
-    st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="BELMONT_LOGO.png", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/BELMONT_LOGO.png", layout="wide", initial_sidebar_state="expanded")
     apply_branding()
 
     # LOGO & HEADER
