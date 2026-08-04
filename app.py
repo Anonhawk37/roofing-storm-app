@@ -219,23 +219,35 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
 
 
 
-def generate_narrative(property_address: str, dol: str, inspection_finding: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
-    """Generate inspection narrative with damage description"""
-    if "Severe" in inspection_finding:
-        obs = "On-site physical roof inspection confirmed direct storm damage, including wind-creased/lifted shingles, displaced tab integrity, and/or mechanical impact marks to soft metals and elevated components."
-    elif "Moderate" in inspection_finding:
-        obs = "On-site physical evaluation revealed localized collateral damage, gutter/fascia impacts, and minor shingle compromise consistent with severe weather exposure."
-    elif "Normal" in inspection_finding:
-        obs = "On-site physical inspection noted general age-related weathering and normal wear. No functional storm-created openings or direct loss was observed."
-    else:
-        obs = "Pre-inspection meteorological analysis conducted to establish site exposure prior to physical on-site verification."
+def generate_narrative(property_address: str, dol: str, inspection_finding: str, damage_type: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
+    """Generate inspection narrative with damage description based on damage type"""
     
-    hail_text = f"{hail_size:.2f}\" hail" if hail_size > 0 else "no recorded hail"
-    wind_text = f"{wind_mph:.0f} mph winds" if wind_mph > 0 else "no recorded wind"
+    # Severity-based observation
+    if "Severe" in inspection_finding:
+        severity = "Severe"
+    elif "Moderate" in inspection_finding:
+        severity = "Moderate"
+    elif "Minor" in inspection_finding:
+        severity = "Minor"
+    else:
+        return "Pre-inspection meteorological analysis conducted to establish site exposure prior to physical on-site verification."
+    
+    # Damage type-based observation
+    if "Hail + Wind" in damage_type:
+        obs = f"On-site physical roof inspection confirmed direct {severity.lower()} storm damage. Hail impact marks visible on shingles with displaced tab integrity. Wind damage evident from lifted/creased shingles and mechanical impact marks to soft metals and elevated components including vents, pipe boots, and flashing."
+    elif "Hail" in damage_type and "Wind" not in damage_type:
+        obs = f"On-site physical roof inspection confirmed direct {severity.lower()} hail damage. Multiple impact marks visible on shingles with compromised tab integrity. Hail strikes evident on soft metals, gutters, and roof-mounted equipment."
+    elif "Wind" in damage_type and "Hail" not in damage_type:
+        obs = f"On-site physical roof inspection confirmed direct {severity.lower()} wind damage. Shingles exhibiting wind-creased and lifted conditions with displaced tab integrity. Mechanical impact marks visible on soft metals, vents, pipe boots, and flashing consistent with high-velocity wind event."
+    else:
+        obs = "On-site physical inspection conducted to assess storm exposure."
+    
+    hail_text = f"{hail_size:.2f}\" hail" if hail_size > 0 else "hail exposure"
+    wind_text = f"{wind_mph:.0f} mph winds" if wind_mph > 0 else "wind exposure"
     
     narrative = f"<b>Field Observation:</b> {obs}<br/><br/><b>Meteorological Context:</b> Property at <b>{property_address}</b> on <b>{dol}</b> experienced {wind_text} and {hail_text}."
     
-    if damage_notes and wind_mph > 0:
+    if damage_notes:
         narrative += f"<br/><br/><b>Storm Reports (Hailstrike Go):</b> {damage_notes}"
     
     return narrative
@@ -246,8 +258,8 @@ def generate_narrative(property_address: str, dol: str, inspection_finding: str,
 
 def generate_adjuster_pdf(
     inspector_name: str, inspector_phone: str, inspector_email: str,
-    property_address: str, customer_name: str, dol: str, inspection_date: str,
-    report_type: str, local_office: str, inspection_finding: str,
+    property_address: str, customer_name: str, customer_phone: str, dol: str, inspection_date: str,
+    report_type: str, local_office: str, inspection_finding: str, damage_type: str,
     hail_size: float, wind_mph: float, wind_sources: list,
     photo_categories_data: Dict[str, List[Dict]],
     damage_notes: str = "",
@@ -308,6 +320,7 @@ def generate_adjuster_pdf(
     metadata_table = Table([
         [Paragraph("<b>Property Address:</b>", NORMAL_STYLE), Paragraph(property_address, NORMAL_STYLE)],
         [Paragraph("<b>Customer Name:</b>", NORMAL_STYLE), Paragraph(customer_name, NORMAL_STYLE)],
+        [Paragraph("<b>Customer Phone:</b>", NORMAL_STYLE), Paragraph(customer_phone, NORMAL_STYLE)],
         [Paragraph("<b>Date of Loss:</b>", NORMAL_STYLE), Paragraph(dol, NORMAL_STYLE)],
         [Paragraph("<b>Inspection Date:</b>", NORMAL_STYLE), Paragraph(inspection_date, NORMAL_STYLE)],
         [Paragraph("<b>Physical Finding:</b>", NORMAL_STYLE), Paragraph(inspection_finding, NORMAL_STYLE)],
@@ -331,7 +344,7 @@ def generate_adjuster_pdf(
         ["Metric", "Value"],
         ["Hail Size", f"{hail_size:.2f}\"" if hail_size > 0 else "Field Observed"],
         ["Peak Wind Gust", wind_mph if isinstance(wind_mph, str) else f"{wind_mph:.0f} mph"],
-        ["Data Source", " | ".join(wind_sources)],
+        ["Data Source", "Radar indicated hail and wind confirmed by local storm reports"],
     ], colWidths=[2.5*inch, 4*inch])
     weather_table.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
@@ -350,7 +363,7 @@ def generate_adjuster_pdf(
     
     # NARRATIVE
     story.append(Paragraph("ASSESSMENT", TITLE_STYLE))
-    narrative = generate_narrative(property_address, dol, inspection_finding, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0, damage_notes)
+    narrative = generate_narrative(property_address, dol, inspection_finding, damage_type, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0, damage_notes)
     story.append(Paragraph(narrative, NORMAL_STYLE))
     story.append(PageBreak())
     
@@ -394,14 +407,21 @@ def generate_adjuster_pdf(
         ))
         story.append(Spacer(1, 0.15*inch))
         
-        for photo in all_photos:
-            story.append(Paragraph(f"<b>{photo['ref_id']}</b> — {photo['category']}", HEADING_STYLE))
-            story.append(Spacer(1, 6))
-            img = get_aspect_rl_image(photo['bytes'], 7.0, 5.0)
-            story.append(img)
-            story.append(Spacer(1, 4))
-            story.append(Paragraph(f"<i>{photo['filename']}</i>", FOOTNOTE_STYLE))
-            story.append(Spacer(1, 0.2*inch))
+        for idx, photo in enumerate(all_photos):
+            # Group heading, image, and filename together so they don't break across pages
+            photo_block = [
+                Paragraph(f"<b>{photo['ref_id']}</b> — {photo['category']}", HEADING_STYLE),
+                Spacer(1, 6),
+                get_aspect_rl_image(photo['bytes'], 7.0, 5.0),
+                Spacer(1, 4),
+                Paragraph(f"<i>{photo['filename']}</i>", FOOTNOTE_STYLE),
+            ]
+            
+            story.append(KeepTogether(photo_block))
+            
+            # Add spacing between photos except after the last one
+            if idx < len(all_photos) - 1:
+                story.append(Spacer(1, 0.25*inch))
     
     doc.build(story)
     return pdf_buffer.getvalue()
@@ -509,6 +529,7 @@ def main():
                 st.warning("Enter a valid address or zip code")
 
         customer_name = st.text_input("Customer Name", placeholder="e.g. Smith Residence")
+        customer_phone = st.text_input("Customer Phone Number", placeholder="(555) 123-4567", help="Phone number to include on inspection report")
         dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
         dol = dol_val.strftime("%Y-%m-%d")
         
@@ -545,7 +566,19 @@ def main():
                             st.image(photo['compressed_bytes'], width=100)
 
         st.markdown('<div class="section-header">🔍 Field Observation</div>', unsafe_allow_html=True)
-        inspection_finding = st.segmented_control("Select Finding:", options=["🔴 Severe Damage", "🟡 Moderate Damage", "🟢 Normal Wear", "🔍 Pre-Inspection Only"], default="🔴 Severe Damage")
+        
+        damage_type = st.segmented_control(
+            "Storm Damage Type:",
+            options=["🧊 Hail Damage", "💨 Wind Damage", "🧊💨 Hail + Wind Damage"],
+            default="🧊💨 Hail + Wind Damage",
+            help="Select based on what you observed on the roof"
+        )
+        
+        inspection_finding = st.segmented_control(
+            "Severity Level:", 
+            options=["🔴 Severe", "🟡 Moderate", "🟢 Minor", "🔍 Pre-Inspection Only"], 
+            default="🔴 Severe"
+        )
 
         st.markdown('<div class="section-header">⛈️ Storm Data (from Hailstrike Go)</div>', unsafe_allow_html=True)
         
@@ -616,8 +649,8 @@ def main():
         st.divider()
 
         if st.button("📄 Build PDF Report", type="primary", use_container_width=True):
-            if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name]):
-                st.error("❌ Complete all required fields in sidebar")
+            if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, customer_phone]):
+                st.error("❌ Complete all required fields in sidebar (including customer phone)")
             elif total_photos == 0:
                 st.error("❌ Upload at least one photo")
             elif hail_size == 0 and wind_speed == 0:
@@ -637,9 +670,9 @@ def main():
                             
                             pdf_bytes = generate_adjuster_pdf(
                                 inspector_name, inspector_phone, inspector_email,
-                                property_address, customer_name, dol,
+                                property_address, customer_name, customer_phone, dol,
                                 inspection_date_val.strftime("%Y-%m-%d"),
-                                report_type, local_office, inspection_finding,
+                                report_type, local_office, inspection_finding, damage_type,
                                 hail_size, wind_speed, wind_sources,
                                 filtered_photos, damage_notes
                             )
