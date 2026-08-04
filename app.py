@@ -423,6 +423,22 @@ def generate_adjuster_pdf(
             if idx < len(all_photos) - 1:
                 story.append(Spacer(1, 0.25*inch))
     
+    # CONCLUSION
+    story.append(PageBreak())
+    story.append(Paragraph("CONCLUSION", TITLE_STYLE))
+    story.append(Spacer(1, 0.1*inch))
+    conclusion_text = """Based on the physical evidence of wind and hail damage documented during this inspection, the property has sustained functional damage to the roofing system and exterior components that warrants professional repair.<br/><br/>It is strongly recommended that the homeowner contact their insurance provider to initiate a claim for these storm-related damages. Furthermore, we advise having an insurance adjuster come out to the property for a physical re-inspection, with a Belmont Construction representative present on-site during the walkthrough. Having our professional representation on-site ensures that all damaged areas—including the roof, siding, doors, fencing and etc—are fully accounted for and properly documented to help secure a complete and accurate approval for property restoration."""
+    story.append(Paragraph(conclusion_text, NORMAL_STYLE))
+    story.append(Spacer(1, 0.3*inch))
+    
+    # FOOTER
+    story.append(Paragraph("_" * 80, FOOTNOTE_STYLE))
+    story.append(Spacer(1, 0.1*inch))
+    story.append(Paragraph(f"Report Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", FOOTNOTE_STYLE))
+    story.append(Paragraph(f"Inspector: {inspector_name} | Phone: {inspector_phone} | Email: {inspector_email}", FOOTNOTE_STYLE))
+    story.append(Spacer(1, 0.05*inch))
+    story.append(Paragraph("© Belmont Construction - Professional Storm Damage Inspections", FOOTNOTE_STYLE))
+    
     doc.build(story)
     return pdf_buffer.getvalue()
 
