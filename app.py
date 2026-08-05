@@ -107,7 +107,7 @@ def geocode_address_resilient(address_str: str) -> Tuple[Optional[float], Option
     """Multi-engine geocoder: ArcGIS → Census → OpenStreetMap"""
     if not address_str or len(address_str.strip()) < 3:
         return None, None, "Please enter a valid address or zip code."
-
+    
     clean_addr = re.sub(r'\b(Apt|Ste|Suite|Unit|Building|Bldg|#)\s*[\w-]+', '', address_str, flags=re.IGNORECASE).strip()
 
     # 1. ArcGIS
@@ -179,11 +179,11 @@ def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> 
     else:
         pil_img = Image.open(img_input)
         img_source = img_input
-
+    
     w, h = pil_img.size
     aspect = h / float(w)
     max_w, max_h = max_w_inches * inch, max_h_inches * inch
-
+    
     if w > h:
         new_w = max_w
         new_h = max_w * aspect
@@ -196,7 +196,7 @@ def get_aspect_rl_image(img_input, max_w_inches: float, max_h_inches: float) -> 
         if new_w > max_w:
             new_w = max_w
             new_h = max_w * aspect
-
+    
     return RLImage(img_source, width=new_w, height=new_h)
 
 def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
@@ -219,19 +219,13 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
 
 
 
-def generate_narrative(property_address: str, dol: str, inspection_finding: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
-    """Generate inspection narrative with damage description"""
 def generate_narrative(property_address: str, dol: str, inspection_finding: str, damage_type: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
     """Generate inspection narrative with damage description based on damage type"""
     
     # Severity-based observation
     if "Severe" in inspection_finding:
-        obs = "On-site physical roof inspection confirmed direct storm damage, including wind-creased/lifted shingles, displaced tab integrity, and/or mechanical impact marks to soft metals and elevated components."
         severity = "Severe"
     elif "Moderate" in inspection_finding:
-        obs = "On-site physical evaluation revealed localized collateral damage, gutter/fascia impacts, and minor shingle compromise consistent with severe weather exposure."
-    elif "Normal" in inspection_finding:
-        obs = "On-site physical inspection noted general age-related weathering and normal wear. No functional storm-created openings or direct loss was observed."
         severity = "Moderate"
     elif "Minor" in inspection_finding:
         severity = "Minor"
@@ -246,20 +240,16 @@ def generate_narrative(property_address: str, dol: str, inspection_finding: str,
     elif "Wind" in damage_type and "Hail" not in damage_type:
         obs = f"On-site physical roof inspection confirmed direct {severity.lower()} wind damage. Shingles exhibiting wind-creased and lifted conditions with displaced tab integrity. Mechanical impact marks visible on soft metals, vents, pipe boots, and flashing consistent with high-velocity wind event."
     else:
-        obs = "Pre-inspection meteorological analysis conducted to establish site exposure prior to physical on-site verification."
         obs = "On-site physical inspection conducted to assess storm exposure."
-
-    hail_text = f"{hail_size:.2f}\" hail" if hail_size > 0 else "no recorded hail"
-    wind_text = f"{wind_mph:.0f} mph winds" if wind_mph > 0 else "no recorded wind"
+    
     hail_text = f"{hail_size:.2f}\" hail" if hail_size > 0 else "hail exposure"
     wind_text = f"{wind_mph:.0f} mph winds" if wind_mph > 0 else "wind exposure"
-
+    
     narrative = f"<b>Field Observation:</b> {obs}<br/><br/><b>Meteorological Context:</b> Property at <b>{property_address}</b> on <b>{dol}</b> experienced {wind_text} and {hail_text}."
-
-    if damage_notes and wind_mph > 0:
+    
     if damage_notes:
         narrative += f"<br/><br/><b>Storm Reports (Hailstrike Go):</b> {damage_notes}"
-
+    
     return narrative
 
 # ============================================================================
@@ -268,8 +258,6 @@ def generate_narrative(property_address: str, dol: str, inspection_finding: str,
 
 def generate_adjuster_pdf(
     inspector_name: str, inspector_phone: str, inspector_email: str,
-    property_address: str, customer_name: str, dol: str, inspection_date: str,
-    report_type: str, local_office: str, inspection_finding: str,
     property_address: str, customer_name: str, customer_phone: str, dol: str, inspection_date: str,
     report_type: str, local_office: str, inspection_finding: str, damage_type: str,
     hail_size: float, wind_mph: float, wind_sources: list,
@@ -277,11 +265,11 @@ def generate_adjuster_pdf(
     damage_notes: str = "",
     logo_path: str = "BELMONT_LOGO.png"
 ) -> bytes:
-
+    
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, rightMargin=0.5*inch, leftMargin=0.5*inch, topMargin=0.5*inch, bottomMargin=0.5*inch)
     story = []
-
+    
     # Flatten photos
     all_photos = []
     for cat_name, p_list in photo_categories_data.items():
@@ -306,14 +294,14 @@ def generate_adjuster_pdf(
         [Paragraph(f"HQ: {COMPANY_HQ}", NORMAL_STYLE)],
         [Paragraph(f"Local Office: {local_office}", NORMAL_STYLE)],
     ]
-
+    
     right_data = [
         [Paragraph("<b>PREPARED BY:</b>", NORMAL_STYLE)],
         [Paragraph(inspector_name, NORMAL_STYLE)],
         [Paragraph(f"Phone: {inspector_phone}", NORMAL_STYLE)],
         [Paragraph(f"Email: {inspector_email}", NORMAL_STYLE)],
     ]
-
+    
     header_table = Table([[Table(left_data, colWidths=[3.25*inch]), Table(right_data, colWidths=[3.25*inch])]], colWidths=[3.5*inch, 3.5*inch])
     header_table.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -326,7 +314,7 @@ def generate_adjuster_pdf(
     ]))
     story.append(header_table)
     story.append(Spacer(1, 0.2*inch))
-
+    
     # METADATA
     story.append(Paragraph("PROPERTY INSPECTION DETAILS", TITLE_STYLE))
     metadata_table = Table([
@@ -349,14 +337,13 @@ def generate_adjuster_pdf(
     ]))
     story.append(metadata_table)
     story.append(Spacer(1, 0.2*inch))
-
+    
     # WEATHER DATA
     story.append(Paragraph("METEOROLOGICAL DATA", TITLE_STYLE))
     weather_table = Table([
         ["Metric", "Value"],
         ["Hail Size", f"{hail_size:.2f}\"" if hail_size > 0 else "Field Observed"],
         ["Peak Wind Gust", wind_mph if isinstance(wind_mph, str) else f"{wind_mph:.0f} mph"],
-        ["Data Source", " | ".join(wind_sources)],
         ["Data Source", "Radar indicated hail and wind confirmed by local storm reports"],
     ], colWidths=[2.5*inch, 4*inch])
     weather_table.setStyle(TableStyle([
@@ -373,21 +360,20 @@ def generate_adjuster_pdf(
     ]))
     story.append(weather_table)
     story.append(Spacer(1, 0.15*inch))
-
+    
     # NARRATIVE
     story.append(Paragraph("ASSESSMENT", TITLE_STYLE))
-    narrative = generate_narrative(property_address, dol, inspection_finding, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0, damage_notes)
     narrative = generate_narrative(property_address, dol, inspection_finding, damage_type, hail_size, wind_mph if isinstance(wind_mph, (int, float)) else 0, damage_notes)
     story.append(Paragraph(narrative, NORMAL_STYLE))
     story.append(PageBreak())
-
+    
     # PHOTO GRIDS
     for category_name, photo_list in photo_categories_data.items():
         if not photo_list:
             continue
         story.append(Paragraph(f"{category_name.upper()}", TITLE_STYLE))
         story.append(Spacer(1, 0.15*inch))
-
+        
         for i in range(0, len(photo_list), 2):
             row_data = []
             for photo in photo_list[i:i+2]:
@@ -398,18 +384,18 @@ def generate_adjuster_pdf(
                     row_data.append(cell)
                 except:
                     row_data.append(Paragraph("Image Error", NORMAL_STYLE))
-
+            
             while len(row_data) < 2:
                 row_data.append(Paragraph("", NORMAL_STYLE))
-
+            
             grid = Table([row_data], colWidths=[3.4*inch, 3.4*inch])
             grid.setStyle(TableStyle([('ALIGN', (0, 0), (-1, -1), 'CENTER'), ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4), ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 6)]))
             story.append(grid)
             story.append(Spacer(1, 0.15*inch))
-
+        
         if category_name != list(photo_categories_data.keys())[-1]:
             story.append(PageBreak())
-
+    
     # APPENDIX
     if all_photos:
         story.append(PageBreak())
@@ -420,15 +406,7 @@ def generate_adjuster_pdf(
             APPENDIX_CAPTION_STYLE
         ))
         story.append(Spacer(1, 0.15*inch))
-
-        for photo in all_photos:
-            story.append(Paragraph(f"<b>{photo['ref_id']}</b> — {photo['category']}", HEADING_STYLE))
-            story.append(Spacer(1, 6))
-            img = get_aspect_rl_image(photo['bytes'], 7.0, 5.0)
-            story.append(img)
-            story.append(Spacer(1, 4))
-            story.append(Paragraph(f"<i>{photo['filename']}</i>", FOOTNOTE_STYLE))
-            story.append(Spacer(1, 0.2*inch))
+        
         for idx, photo in enumerate(all_photos):
             # Group heading, image, and filename together so they don't break across pages
             photo_block = [
@@ -444,7 +422,23 @@ def generate_adjuster_pdf(
             # Add spacing between photos except after the last one
             if idx < len(all_photos) - 1:
                 story.append(Spacer(1, 0.25*inch))
-
+    
+    # CONCLUSION
+    story.append(PageBreak())
+    story.append(Paragraph("CONCLUSION", TITLE_STYLE))
+    story.append(Spacer(1, 0.1*inch))
+    conclusion_text = """Based on the physical evidence of wind and hail damage documented during this inspection, the property has sustained functional damage to the roofing system and exterior components that warrants professional repair.<br/><br/>It is strongly recommended that the homeowner contact their insurance provider to initiate a claim for these storm-related damages. Furthermore, we advise having an insurance adjuster come out to the property for a physical re-inspection, with a Belmont Construction representative present on-site during the walkthrough. Having our professional representation on-site ensures that all damaged areas—including the roof, siding, doors, fencing and etc—are fully accounted for and properly documented to help secure a complete and accurate approval for property restoration."""
+    story.append(Paragraph(conclusion_text, NORMAL_STYLE))
+    story.append(Spacer(1, 0.3*inch))
+    
+    # FOOTER
+    story.append(Paragraph("_" * 80, FOOTNOTE_STYLE))
+    story.append(Spacer(1, 0.1*inch))
+    story.append(Paragraph(f"Report Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", FOOTNOTE_STYLE))
+    story.append(Paragraph(f"Inspector: {inspector_name} | Phone: {inspector_phone} | Email: {inspector_email}", FOOTNOTE_STYLE))
+    story.append(Spacer(1, 0.05*inch))
+    story.append(Paragraph("© Belmont Construction - Professional Storm Damage Inspections", FOOTNOTE_STYLE))
+    
     doc.build(story)
     return pdf_buffer.getvalue()
 
@@ -496,13 +490,13 @@ def apply_branding():
     """, unsafe_allow_html=True)
 
 def main():
-    st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/BELMONT_LOGO.png", layout="wide", initial_sidebar_state="expanded")
     apply_branding()
 
     # LOGO & HEADER
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
-
+    
     if logo_base64:
         st.markdown(f"""
             <div style="text-align: center; margin-bottom: 20px;">
@@ -511,7 +505,7 @@ def main():
         """, unsafe_allow_html=True)
     else:
         st.markdown("<h2 style='text-align: center; margin-top: 0;'>🏢 BELMONT</h2>", unsafe_allow_html=True)
-
+    
     st.markdown("""
         <div style="background-color: #FAF8F5; border-left: 6px solid #D4AF37; padding: 18px 24px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
             <div style="color: #1E293B; font-size: 26px; font-weight: 700; margin: 0;">Field Inspection & Adjuster Claims Portal</div>
@@ -532,7 +526,7 @@ def main():
         inspector_name = st.text_input("Inspector Name", value="Matt Caesar")
         inspector_phone = st.text_input("Inspector Phone", placeholder="(314) 555-0199")
         inspector_email = st.text_input("Inspector Email", placeholder="matt@belmontconstruction.com")
-
+        
         st.divider()
         st.markdown("### 📍 Property Details")
         property_address = st.text_input("Property Address or Zip Code", value=ss.raw_address_input, placeholder="e.g. 123 Main St, IL or 62221")
@@ -554,7 +548,7 @@ def main():
         customer_phone = st.text_input("Customer Phone Number", placeholder="(555) 123-4567", help="Phone number to include on inspection report")
         dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
         dol = dol_val.strftime("%Y-%m-%d")
-
+        
         col1, col2 = st.columns([2, 1])
         with col1:
             inspection_date_val = st.date_input("Inspection Date", value=date.today())
@@ -573,7 +567,7 @@ def main():
     with tab_report:
         st.markdown('<div class="section-header">📷 Photo Documentation</div>', unsafe_allow_html=True)
         total_photos = 0
-
+        
         for category_name, cat_info in PHOTO_CATEGORIES.items():
             with st.expander(f"📁 {category_name}"):
                 files = st.file_uploader(f"Upload photos", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"uploader_{category_name}")
@@ -588,7 +582,6 @@ def main():
                             st.image(photo['compressed_bytes'], width=100)
 
         st.markdown('<div class="section-header">🔍 Field Observation</div>', unsafe_allow_html=True)
-        inspection_finding = st.segmented_control("Select Finding:", options=["🔴 Severe Damage", "🟡 Moderate Damage", "🟢 Normal Wear", "🔍 Pre-Inspection Only"], default="🔴 Severe Damage")
         
         damage_type = st.segmented_control(
             "Storm Damage Type:",
@@ -604,9 +597,9 @@ def main():
         )
 
         st.markdown('<div class="section-header">⛈️ Storm Data (from Hailstrike Go)</div>', unsafe_allow_html=True)
-
+        
         st.caption(f"📸 **{total_photos} Photos Attached**")
-
+        
         # LOCATION INFO
         if ss.geocoded_data and ss.geocoded_data.get('lat'):
             st.markdown(f"""
@@ -622,9 +615,9 @@ def main():
 
         # HAIL & WIND MANUAL ENTRY
         st.markdown("### 🌧️ Storm Measurements")
-
+        
         col_hail, col_wind = st.columns(2)
-
+        
         with col_hail:
             st.markdown("**Hail Size**")
             hail_size = st.number_input(
@@ -633,7 +626,7 @@ def main():
             )
             if hail_size > 0:
                 st.success(f"✓ {hail_size}\"")
-
+        
         with col_wind:
             st.markdown("**Wind Speed**")
             wind_speed = st.number_input(
@@ -642,7 +635,7 @@ def main():
             )
             if wind_speed > 0:
                 st.success(f"✓ {wind_speed:.0f} mph")
-
+        
         # Damage Description
         st.markdown("### 📋 Damage Description (from Hailstrike Go LSRs)")
         damage_notes = st.text_area(
@@ -651,7 +644,7 @@ def main():
             height=80,
             help="Copy/summarize the damage descriptions from Hailstrike Go LSRs. This goes in the PDF to show your reasoning."
         )
-
+        
         # Wind damage reference guide
         with st.expander("📖 Wind Speed Damage Reference"):
             st.markdown("""
@@ -672,8 +665,6 @@ def main():
         st.divider()
 
         if st.button("📄 Build PDF Report", type="primary", use_container_width=True):
-            if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name]):
-                st.error("❌ Complete all required fields in sidebar")
             if not all([inspector_name, inspector_phone, inspector_email, property_address, customer_name, customer_phone]):
                 st.error("❌ Complete all required fields in sidebar (including customer phone)")
             elif total_photos == 0:
@@ -682,7 +673,7 @@ def main():
                 st.error("❌ Enter hail size or wind speed")
             elif wind_speed > 0 and not damage_notes.strip():
                 st.warning("⚠️ Wind speed entered but no damage description. Add damage notes from Hailstrike Go.")
-
+            
             if inspector_name and property_address and customer_name and total_photos > 0 and (hail_size > 0 or wind_speed > 0):
                 # Only allow PDF if wind has damage notes
                 if wind_speed > 0 and not damage_notes.strip():
@@ -692,18 +683,16 @@ def main():
                         try:
                             filtered_photos = {k: v for k, v in ss.photo_data.items() if v}
                             wind_sources = [f"Manual Entry (Hailstrike Go: {damage_notes[:50]}...)" if damage_notes else "Manual Entry"]
-
+                            
                             pdf_bytes = generate_adjuster_pdf(
                                 inspector_name, inspector_phone, inspector_email,
-                                property_address, customer_name, dol,
                                 property_address, customer_name, customer_phone, dol,
                                 inspection_date_val.strftime("%Y-%m-%d"),
-                                report_type, local_office, inspection_finding,
                                 report_type, local_office, inspection_finding, damage_type,
                                 hail_size, wind_speed, wind_sources,
                                 filtered_photos, damage_notes
                             )
-
+                            
                             st.download_button(
                                 label=f"📥 Download PDF ({len(pdf_bytes) / (1024*1024):.1f} MB)",
                                 data=pdf_bytes,
@@ -718,7 +707,7 @@ def main():
     with tab_claims:
         st.markdown('<div class="section-header">📞 Direct Claims Hotlines</div>', unsafe_allow_html=True)
         st.caption("Tap to call for First Notice of Loss (FNOL)")
-
+        
         col_left, col_right = st.columns(2)
         for idx, (carrier, phone) in enumerate(CARRIER_HOTLINES):
             if idx % 2 == 0:
