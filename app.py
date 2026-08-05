@@ -16,6 +16,7 @@ import io
 from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 import requests
+import streamlit_antd_components as sac
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -493,12 +494,6 @@ def main():
     st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/BELMONT_LOGO.png", layout="wide", initial_sidebar_state="expanded")
     apply_branding()
 
-    # Add Apple Touch Icon for iOS
-    st.markdown(
-        '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/apple-touch-icon.png">',
-        unsafe_allow_html=True
-    )
-
     # LOGO & HEADER
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
@@ -552,17 +547,24 @@ def main():
 
         customer_name = st.text_input("Customer Name", placeholder="e.g. Smith Residence")
         customer_phone = st.text_input("Customer Phone Number", placeholder="(555) 123-4567", help="Phone number to include on inspection report")
-        dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
-        dol = dol_val.strftime("%Y-%m-%d")
+        
+        # Date of Loss - AntD Calendar Picker
+        st.markdown("**Date of Loss (DOL)**")
+        dol_val = sac.date_picker(key="dol_picker", value=date.today())
+        dol = dol_val.strftime("%Y-%m-%d") if dol_val else date.today().strftime("%Y-%m-%d")
         
         col1, col2 = st.columns([2, 1])
         with col1:
-            inspection_date_val = st.date_input("Inspection Date", value=date.today())
+            st.markdown("**Inspection Date**")
+            inspection_date_val = sac.date_picker(key="inspection_picker", value=date.today())
         with col2:
             st.write("")
             st.write("")
             if st.button("Today"):
                 inspection_date_val = date.today()
+        
+        if not inspection_date_val:
+            inspection_date_val = date.today()
 
         report_type = st.radio("Report Type", options=["Post-Inspection Claims Report", "Pre-Inspection Assessment"], index=0)
         local_office = st.text_input("Local Office", value="St. Louis, MO")
