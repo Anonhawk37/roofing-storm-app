@@ -493,6 +493,12 @@ def main():
     st.set_page_config(page_title="Belmont Construction - Inspection Suite", page_icon="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/BELMONT_LOGO.png", layout="wide", initial_sidebar_state="expanded")
     apply_branding()
 
+    # Add Apple Touch Icon for iOS
+    st.markdown(
+        '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/Anonhawk37/roofing-storm-app/main/apple-touch-icon.png">',
+        unsafe_allow_html=True
+    )
+
     # LOGO & HEADER
     logo_path = os.path.abspath("BELMONT_LOGO.png")
     logo_base64 = get_image_base64(logo_path)
