@@ -1,5 +1,6 @@
 streamlit==1.41.1
 starlette==0.37.0
+streamlit-antd-components
 Pillow
 reportlab
 streamlit-searchbox
