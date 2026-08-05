@@ -1,5 +1,5 @@
-streamlit==1.40.0
-starlette==0.36.3
+streamlit==1.39.0
+starlette==0.35.0
 Pillow
 reportlab
 streamlit-searchbox
