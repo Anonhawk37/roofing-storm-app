@@ -16,7 +16,6 @@ import io
 from datetime import datetime, date
 from typing import List, Dict, Tuple, Optional
 import requests
-import streamlit_antd_components as sac
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -215,10 +214,8 @@ def process_uploaded_photos(uploaded_files: List) -> List[Dict]:
     return processed_photos
 
 # ============================================================================
-# WEATHER ENGINE: WIND DATA ONLY
+# NARRATIVE GENERATION
 # ============================================================================
-
-
 
 def generate_narrative(property_address: str, dol: str, inspection_finding: str, damage_type: str, hail_size: float, wind_mph: float, damage_notes: str = "") -> str:
     """Generate inspection narrative with damage description based on damage type"""
@@ -548,23 +545,17 @@ def main():
         customer_name = st.text_input("Customer Name", placeholder="e.g. Smith Residence")
         customer_phone = st.text_input("Customer Phone Number", placeholder="(555) 123-4567", help="Phone number to include on inspection report")
         
-        # Date of Loss - AntD Calendar Picker
-        st.markdown("**Date of Loss (DOL)**")
-        dol_val = sac.date_picker(key="dol_picker", value=date.today())
-        dol = dol_val.strftime("%Y-%m-%d") if dol_val else date.today().strftime("%Y-%m-%d")
+        dol_val = st.date_input("Date of Loss (DOL)", value=date.today())
+        dol = dol_val.strftime("%Y-%m-%d")
         
         col1, col2 = st.columns([2, 1])
         with col1:
-            st.markdown("**Inspection Date**")
-            inspection_date_val = sac.date_picker(key="inspection_picker", value=date.today())
+            inspection_date_val = st.date_input("Inspection Date", value=date.today())
         with col2:
             st.write("")
             st.write("")
             if st.button("Today"):
                 inspection_date_val = date.today()
-        
-        if not inspection_date_val:
-            inspection_date_val = date.today()
 
         report_type = st.radio("Report Type", options=["Post-Inspection Claims Report", "Pre-Inspection Assessment"], index=0)
         local_office = st.text_input("Local Office", value="St. Louis, MO")
