@@ -21,9 +21,35 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak,
-    Image as RLImage, KeepTogether
+    Image as RLImage, KeepTogether, Flowable
 )
 from reportlab.lib.enums import TA_CENTER
+
+
+class BreakToPageTwo(Flowable):
+    """
+    Pushes whatever follows to the top of page 2 -- but only if the
+    document is still on page 1. If earlier content (e.g. a long Scope
+    of Work) has already pushed the layout onto page 2 or beyond, this
+    does nothing and lets content continue flowing naturally.
+    """
+    def __init__(self):
+        Flowable.__init__(self)
+        self.width = 0
+        self.height = 0
+
+    def wrap(self, availWidth, availHeight):
+        try:
+            current_page = self.canv.getPageNumber()
+        except Exception:
+            current_page = 1
+        if current_page <= 1:
+            # Report we need more room than is left -> forces a page break
+            return (availWidth, availHeight + 1)
+        return (0, 0)
+
+    def draw(self):
+        pass
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -575,23 +601,39 @@ def generate_quote_pdf(
         story.append(Paragraph(scope_notes.replace("\n", "<br/>"), NORMAL_STYLE))
         story.append(Spacer(1, 0.2*inch))
 
-    # TERMS & CONDITIONS
+    # TERMS & CONDITIONS -- always starts at the top of page 2, unless a
+    # long Scope of Work already pushed the layout there, in which case
+    # it simply continues wherever the flow landed on page 2.
+    story.append(BreakToPageTwo())
     story.append(Paragraph("TERMS & CONDITIONS", TITLE_STYLE))
     story.append(Paragraph(terms_text.replace("\n", "<br/>"), NORMAL_STYLE))
     story.append(Spacer(1, 0.35*inch))
 
-    # SIGNATURE
-    sig_table = Table([
-        ["Customer Signature:", "_______________________________", "Date:", "______________"],
-        ["", "", "", ""],
-        [f"{COMPANY_NAME} Representative:", "_______________________________", "Date:", "______________"],
-    ], colWidths=[1.6*inch, 2.6*inch, 0.6*inch, 1.7*inch])
-    sig_table.setStyle(TableStyle([
+    # SIGNATURE -- label sits above the line so long labels never collide
+    # with the signature/date underline.
+    sig_line_style = TableStyle([
         ('FONTSIZE', (0, 0), (-1, -1), 9),
         ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
-        ('TOPPADDING', (0, 0), (-1, -1), 10),
-    ]))
-    story.append(sig_table)
+    ])
+
+    story.append(Paragraph("<b>Customer Signature:</b>", NORMAL_STYLE))
+    story.append(Spacer(1, 0.35*inch))
+    cust_sig_table = Table(
+        [["_______________________________", "", "Date:", "______________"]],
+        colWidths=[3.2*inch, 0.4*inch, 0.5*inch, 1.7*inch]
+    )
+    cust_sig_table.setStyle(sig_line_style)
+    story.append(cust_sig_table)
+    story.append(Spacer(1, 0.3*inch))
+
+    story.append(Paragraph(f"<b>{COMPANY_NAME} Representative:</b>", NORMAL_STYLE))
+    story.append(Spacer(1, 0.35*inch))
+    rep_sig_table = Table(
+        [["_______________________________", "", "Date:", "______________"]],
+        colWidths=[3.2*inch, 0.4*inch, 0.5*inch, 1.7*inch]
+    )
+    rep_sig_table.setStyle(sig_line_style)
+    story.append(rep_sig_table)
     story.append(Spacer(1, 0.3*inch))
 
     # FOOTER
